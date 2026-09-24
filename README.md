@@ -1,6 +1,6 @@
 # Canvas++
 
-Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincronizan en tiempo real entre Android, Windows y el navegador a través de un pequeño servidor que corre en tu NAS.
+Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincronizan en tiempo real entre Android, Windows, Linux y el navegador a través de un pequeño servidor que corre en tu NAS.
 
 ![Pizarra](docs/pizarra.png)
 
@@ -106,7 +106,7 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
 
 ```
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│ Android      │   │ Windows      │   │ Navegador    │
+│ Android      │   │ Windows/Linux│   │ Navegador    │
 │ (Capacitor)  │   │ (Electron)   │   │ http://nas   │
 └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
        │  WebSocket + REST (token)           │
@@ -117,7 +117,7 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
                └─────────────┘
 ```
 
-- `app/`: cliente en TypeScript + Vite (Canvas 2D y [perfect-freehand](https://github.com/steveruizok/perfect-freehand)). La misma base de código se empaqueta para Android y Windows.
+- `app/`: cliente en TypeScript + Vite (Canvas 2D y [perfect-freehand](https://github.com/steveruizok/perfect-freehand)). La misma base de código se empaqueta para Android, Windows y Linux.
 - `server/`: servidor Node de un solo archivo (`ws` es su única dependencia). Guarda cada proyecto en `/data/projects/<id>.json`, las imágenes de los documentos en `/data/assets/`, y mueve los proyectos borrados a `/data/trash/`. También sirve el cliente web.
 - **Sincronización:** cada trazo o post-it es un elemento independiente con su versión (`rev`, `by`). En caso de conflicto gana el cambio más reciente, elemento por elemento. Cada dispositivo guarda una copia en IndexedDB, así que funciona sin conexión.
 
@@ -158,16 +158,19 @@ Si olvidas la contraseña de administrador y no hay otro administrador, para el 
 
 1. **Solo la primera vez: firma del APK.** Añade los 4 secretos `ANDROID_KEYSTORE_*` en *Settings → Secrets and variables → Actions*. Sin ellos el APK sale firmado en modo debug con una clave distinta en cada versión, y para actualizar habría que desinstalar la anterior.
 2. **Publicar una versión:** en GitHub, *Releases → Draft a new release → Choose a tag* → escribe `v0.1.0` (y `v0.2.0`, `v0.3.0`… en las siguientes) → *Publish release*.
-3. La acción *Apps (Windows + Android)* compila con ese número de versión y adjunta a la Release, en unos 10 minutos:
-   - `Canvas++ Setup x.y.z.exe` (instalador) y `Canvas++ x.y.z.exe` (portable) para Windows.
+3. La acción *Apps (Windows + Linux + Android)* compila con ese número de versión y adjunta a la Release, en unos 10 minutos:
+   - `Canvas-Setup-x.y.z.exe` (instalador) y `Canvas-Portable-x.y.z.exe` (portable) para Windows.
+   - `Canvas-x.y.z-x86_64.AppImage` para cualquier Linux: dale permiso de ejecución (`chmod +x`) y ábrelo; se actualiza solo. Y `canvaspp_x.y.z_amd64.deb` para Ubuntu/Debian (`sudo apt install ./canvaspp_*.deb`).
    - `Canvas++.apk` para Android (activa *Instalar apps desconocidas*).
 
 ### Actualizaciones desde la app
 
-Windows y Android consultan la última Release de GitHub al arrancar, al volver a la app y cada 6 h. Si hay una versión mayor, aparece un aviso con **Actualizar** y las **Novedades** de la Release.
+Windows, Linux y Android consultan la última Release de GitHub al arrancar, al volver a la app y cada 6 h. Si hay una versión mayor, aparece un aviso con **Actualizar** y las **Novedades** de la Release.
 
 - **Windows (instalador):** descarga la versión nueva dentro de la app, con barra de progreso y solo lo que ha cambiado. Después, **Reiniciar y actualizar** cierra Canvas++, la instala y la vuelve a abrir. Si eliges *Más tarde*, se instala al cerrar la app. Usa `electron-updater` con los archivos `latest.yml` y `.blockmap` que la acción sube a la Release.
 - **Windows (portable):** no puede actualizarse solo; el aviso descarga el portable nuevo.
+- **Linux (AppImage):** igual que el instalador de Windows: descarga, **Reiniciar y actualizar** y listo (usa `latest-linux.yml`).
+- **Linux (.deb):** el aviso descarga el `.deb` nuevo para instalarlo con `sudo apt install ./canvaspp_*.deb`.
 - **Android:** descarga el APK dentro de la app, con progreso, y abre el instalador de Android. La primera vez, Android pide permitir instalar aplicaciones desde Canvas++. Para instalar encima sin desinstalar, el APK debe ir firmado siempre con la misma clave (secretos `ANDROID_KEYSTORE_*`).
 - Las versiones instaladas antes de este gestor no lo incluyen: hay que instalar una vez a mano la primera versión que lo trae.
 - **La web servida desde el NAS** avisa con **Recargar** cuando el contenedor se ha actualizado.
@@ -183,8 +186,9 @@ cd app
 npm install
 npm run dev          # desarrollo en el navegador (http://localhost:5173)
 
-npm run win:dev      # abrir como app de Windows
+npm run win:dev      # abrir como app de escritorio (Windows o Linux)
 npm run win:build    # generar instalador en app/electron/release/
+npm run linux:build  # AppImage y .deb en app/electron/release/ (desde Linux)
 
 npm run android:sync # genera/actualiza app/android (Capacitor)
 npm run android:open # abre en Android Studio → Run / Build APK

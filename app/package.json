@@ -13,7 +13,8 @@
     "android:sync": "npm run build && node scripts/android-setup.mjs",
     "android:open": "npx cap open android",
     "win:dev": "npm run build && electron .",
-    "win:build": "npm run build && electron-builder --win"
+    "win:build": "npm run build && electron-builder --win",
+    "linux:build": "npm run build && electron-builder --linux"
   },
   "dependencies": {
     "@capacitor/filesystem": "^8.1.3",
@@ -76,6 +77,29 @@
     ],
     "portable": {
       "artifactName": "Canvas-Portable-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "icon": "public/icon-512.png",
+      "executableName": "canvaspp",
+      "synopsis": "Pizarra infinita sincronizada con tu NAS",
+      "description": "Pizarra infinita para dibujar, tomar notas y organizar proyectos, sincronizada entre dispositivos a través de tu NAS.",
+      "maintainer": "Esther pKa",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "Canvas++"
+        }
+      }
+    },
+    "appImage": {
+      "artifactName": "Canvas-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "artifactName": "canvaspp_${version}_${arch}.${ext}"
     }
   },
   "canvaspp": {
@@ -88,5 +112,6 @@
     "exceljs": {
       "uuid": "^11.1.1"
     }
-  }
+  },
+  "homepage": "https://github.com/pkatheassh0l3/Canvas-"
 }

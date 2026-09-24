@@ -8,12 +8,12 @@ const REPO = __UPDATE_REPO__;
 const CHECK_EVERY = 6 * 60 * 60 * 1000;
 const DISMISS_KEY = 'canvaspp.update.dismissed';
 
-export type Platform = 'android' | 'windows' | 'web';
+export type Platform = 'android' | 'windows' | 'linux' | 'web';
 
 export function platform(): Platform {
   const cap = (window as any).Capacitor;
   if (cap?.isNativePlatform?.() && cap.getPlatform?.() === 'android') return 'android';
-  if (/Electron/i.test(navigator.userAgent)) return 'windows';
+  if (/Electron/i.test(navigator.userAgent)) return /Linux/i.test(navigator.userAgent) ? 'linux' : 'windows';
   return 'web';
 }
 
@@ -56,12 +56,16 @@ async function checkGithub(p: Platform): Promise<UpdateInfo | null> {
   });
   if (!rel?.tag_name || !isNewerVersion(rel.tag_name, APP_VERSION)) return null;
   const assets: { name: string; browser_download_url: string }[] = rel.assets || [];
+  const inApp = (p === 'windows' || p === 'linux') && !!(await desktop()?.supported().catch(() => false));
   const pick =
     p === 'android'
       ? assets.find((a) => a.name.endsWith('.apk'))
-      : assets.find((a) => /setup.*\.exe$/i.test(a.name)) || assets.find((a) => a.name.endsWith('.exe'));
-  // la versión portable descarga el portable nuevo
-  const portable = p === 'windows' && !(await desktop()?.supported().catch(() => false)) && assets.find((a) => /portable.*\.exe$/i.test(a.name));
+      : p === 'linux'
+        ? // AppImage (se actualiza sola) o, si se instaló con .deb, el paquete nuevo
+          (inApp ? assets.find((a) => /\.AppImage$/i.test(a.name)) : assets.find((a) => /\.deb$/i.test(a.name))) || assets.find((a) => /\.AppImage$/i.test(a.name))
+        : assets.find((a) => /setup.*\.exe$/i.test(a.name)) || assets.find((a) => a.name.endsWith('.exe'));
+  // la versión portable de Windows descarga el portable nuevo
+  const portable = p === 'windows' && !inApp && assets.find((a) => /portable.*\.exe$/i.test(a.name));
   return {
     version: rel.tag_name.replace(/^v/, ''),
     url: (portable || pick)?.browser_download_url || rel.html_url,
@@ -102,14 +106,14 @@ const desktop = (): DesktopUpdater | undefined => (window as any).canvasUpdater;
 async function canInstallInApp(): Promise<boolean> {
   const p = platform();
   if (p === 'android') return true;
-  if (p === 'windows') return !!(await desktop()?.supported().catch(() => false));
+  if (p === 'windows' || p === 'linux') return !!(await desktop()?.supported().catch(() => false));
   return false;
 }
 
 const mb = (n: number) => (n / 1048576).toLocaleString('es-ES', { maximumFractionDigits: 1 });
 
-/** Windows: descarga con electron-updater (solo lo que cambia) y reinicia. */
-async function installWindows(progress: Progress) {
+/** Windows y Linux (AppImage): descarga con electron-updater (solo lo que cambia) y reinicia. */
+async function installDesktop(progress: Progress) {
   const up = desktop()!;
   const off = up.onProgress((p) => progress(p.percent, `Descargando… ${mb(p.transferred)} de ${mb(p.total)} MB`));
   try {
@@ -189,7 +193,7 @@ function showBanner(u: UpdateInfo, inApp: boolean) {
     later.textContent = 'Ocultar';
     title.textContent = `Actualizando a ${u.version}`;
     try {
-      const install = platform() === 'android' ? await installAndroid(u, progress) : await installWindows(progress);
+      const install = platform() === 'android' ? await installAndroid(u, progress) : await installDesktop(progress);
       title.textContent = `Versión ${u.version} lista`;
       sub.textContent = platform() === 'android' ? 'Pulsa Instalar y confirma en la ventana de Android.' : 'Se cerrará Canvas++, se instalará y volverá a abrirse.';
       main.textContent = platform() === 'android' ? 'Instalar' : 'Reiniciar y actualizar';

@@ -1,4 +1,4 @@
-// Canvas++ para Windows (Electron).
+// Canvas++ para Windows y Linux (Electron).
 // El cliente compilado (dist/) se sirve con un protocolo propio app:// en lugar de file://,
 // para que funcionen los módulos, los workers (importar PDF) y el almacenamiento local.
 const { app, BrowserWindow, shell, Menu, protocol, net, ipcMain } = require('electron');
@@ -54,7 +54,8 @@ function getUpdater() {
   updater = autoUpdater;
   return updater;
 }
-ipcMain.handle('upd:supported', () => app.isPackaged && !portable);
+// Linux: solo el AppImage puede sustituirse a sí mismo; el .deb se actualiza descargando el paquete nuevo
+ipcMain.handle('upd:supported', () => app.isPackaged && !portable && (process.platform !== 'linux' || !!process.env.APPIMAGE));
 ipcMain.handle('upd:download', async () => {
   const u = getUpdater();
   const r = await u.checkForUpdates();
