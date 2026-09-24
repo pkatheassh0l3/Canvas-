@@ -156,9 +156,14 @@ Si olvidas la contraseña de administrador y no hay otro administrador, para el 
    - `Canvas++ Setup x.y.z.exe` (instalador) y `Canvas++ x.y.z.exe` (portable) para Windows.
    - `Canvas++.apk` para Android (activa *Instalar apps desconocidas*).
 
-### Avisos de actualización
+### Actualizaciones desde la app
 
-- **Windows y Android** consultan la última Release de GitHub al arrancar, al volver a la app y cada 6 h. Si hay una versión mayor, aparece un aviso con el botón **Descargar**, que abre directamente el `.exe` o el `.apk`.
+Windows y Android consultan la última Release de GitHub al arrancar, al volver a la app y cada 6 h. Si hay una versión mayor, aparece un aviso con **Actualizar** y las **Novedades** de la Release.
+
+- **Windows (instalador):** descarga la versión nueva dentro de la app, con barra de progreso y solo lo que ha cambiado. Después, **Reiniciar y actualizar** cierra Canvas++, la instala y la vuelve a abrir. Si eliges *Más tarde*, se instala al cerrar la app. Usa `electron-updater` con los archivos `latest.yml` y `.blockmap` que la acción sube a la Release.
+- **Windows (portable):** no puede actualizarse solo; el aviso descarga el portable nuevo.
+- **Android:** descarga el APK dentro de la app, con progreso, y abre el instalador de Android. La primera vez, Android pide permitir instalar aplicaciones desde Canvas++. Para instalar encima sin desinstalar, el APK debe ir firmado siempre con la misma clave (secretos `ANDROID_KEYSTORE_*`).
+- Las versiones instaladas antes de este gestor no lo incluyen: hay que instalar una vez a mano la primera versión que lo trae.
 - **La web servida desde el NAS** avisa con **Recargar** cuando el contenedor se ha actualizado.
 - En ⚙ Ajustes hay un botón **Buscar actualizaciones**, y se muestra la versión instalada.
 - El repositorio que se consulta está en `app/package.json` → `canvaspp.updateRepo`.

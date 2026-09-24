@@ -2,7 +2,7 @@ name: Apps (Windows + Android)
 
 # Al publicar una Release (o subir una etiqueta vX.Y.Z) se compilan el instalador de Windows
 # y el APK de Android con esa versión y se adjuntan a la Release.
-# Las apps consultan la última Release para avisar de que hay actualización.
+# Las apps consultan la última Release y se actualizan desde dentro (Windows instalado y Android).
 on:
   push:
     tags: ['v*']
@@ -40,11 +40,18 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: canvaspp-windows
-          path: app/electron/release/*.exe
+          path: |
+            app/electron/release/*.exe
+            app/electron/release/latest.yml
+            app/electron/release/*.blockmap
+      # latest.yml y .blockmap: los usa el gestor de actualizaciones de la app para descargar e instalar la versión nueva
       - if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: app/electron/release/*.exe
+          files: |
+            app/electron/release/*.exe
+            app/electron/release/latest.yml
+            app/electron/release/*.blockmap
 
   android:
     runs-on: ubuntu-latest

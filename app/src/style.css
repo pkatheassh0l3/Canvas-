@@ -2632,3 +2632,51 @@ button.list-main {
     display: none;
   }
 }
+
+/* ---------- actualizaciones: progreso y novedades ---------- */
+.ub-text {
+  min-width: 220px;
+  max-width: 380px;
+}
+.ub-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: #ecebe6;
+  overflow: hidden;
+  margin-top: 8px;
+}
+.ub-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.25s;
+}
+.ub-progress.indeterminate .ub-fill {
+  width: 30%;
+  animation: ub-slide 1.2s ease-in-out infinite;
+}
+@keyframes ub-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+.ub-more {
+  align-self: flex-start;
+  font-size: 13px;
+  padding: 4px 0 0;
+}
+.ub-notes {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 140px;
+  overflow: auto;
+}
+.update-banner .btn:disabled {
+  opacity: 0.55;
+}
