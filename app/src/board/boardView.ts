@@ -41,6 +41,7 @@ import {
   NOTE_COLORS,
   PEN_COLORS,
   renderToCanvas,
+  reshapeNote,
   setRedrawHook,
   TEXT_FONT,
   TEXT_LINE,
@@ -84,7 +85,7 @@ import { openShare } from '../features/share';
 import { insertVideo, openVideo, recordVoice, toggleAudio as toggleAudioFn } from '../features/media';
 import { editMath } from '../features/math';
 import { copyCode, createChart, editChart, editCode, pickEmoji } from '../features/content';
-import { insertTemplate, TEMPLATES } from '../features/templates';
+import { saveAsTemplate } from '../features/saveTemplate';
 import { recognizeStroke } from '../features/recognize';
 import { exportAnnotatedPdf, exportBoardPdf, exportDocPdf, saveFile } from '../features/exporter';
 import { closePanels } from '../features/panel';
@@ -462,8 +463,6 @@ export class BoardView {
           toast('Arrastra de un elemento a otro para unirlos');
         }),
       ),
-      h('div', { class: 'ip-title' }, 'Plantillas'),
-      h('div', { class: 'ip-grid four' }, ...TEMPLATES.map((t) => it(icons.template, t.name, () => insertTemplate(this, t.key)))),
     );
   }
 
@@ -516,6 +515,7 @@ export class BoardView {
       item(icons.fileExport, 'Exportar PDF (un marco por página)', () => exportBoardPdf(this, 'frames')),
       item(icons.image, 'Exportar PNG', () => this.exportPng()),
       item(icons.upload, 'Importar Word/PDF', () => this.importDocument()),
+      item(icons.template, 'Guardar como plantilla', () => saveAsTemplate(this)),
       item(icons.edit, 'Renombrar proyecto', () => this.rename()),
       sep('Ajustes'),
       h(
@@ -962,7 +962,11 @@ export class BoardView {
   /** Versión en curso del elemento que se está redimensionando o girando. */
   previewItem(): Item | null {
     const g = this.g;
-    if (g?.t === 'resize') return { ...g.note, w: g.w, h: g.h, x: g.nx ?? g.note.x, y: g.ny ?? g.note.y } as Item;
+    if (g?.t === 'resize') {
+      const moved = { x: g.nx ?? g.note.x, y: g.ny ?? g.note.y };
+      if (g.note.kind === 'note') return { ...reshapeNote(g.note, g.w, g.h), ...moved };
+      return { ...g.note, w: g.w, h: g.h, ...moved } as Item;
+    }
     if (g?.t === 'rotate') return { ...g.item, rot: g.rot } as Item;
     return null;
   }
@@ -1492,7 +1496,12 @@ export class BoardView {
         this.hidden.clear();
         this.baseDirty = true;
         const cur = this.doc.get(g.note.id) as BoxItem | undefined;
-        if (cur && !cancelled) this.doc.commit([{ ...cur, w: g.w, h: g.h, x: g.nx ?? cur.x, y: g.ny ?? cur.y }]);
+        if (cur && !cancelled) {
+          const moved = { x: g.nx ?? cur.x, y: g.ny ?? cur.y };
+          // post-it: la zona de dibujo adopta la forma nueva
+          if (cur.kind === 'note') this.doc.commit([{ ...reshapeNote(cur, g.w, g.h), ...moved }]);
+          else this.doc.commit([{ ...cur, w: g.w, h: g.h, ...moved }]);
+        }
         break;
       }
       case 'shape': {

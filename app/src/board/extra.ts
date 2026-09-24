@@ -21,6 +21,10 @@ const MONO = (px: number) => `${px}px ui-monospace, "Cascadia Code", Consolas, "
 type Resolver = (id: string) => Item | undefined;
 let resolver: Resolver = () => undefined;
 /** La pizarra registra cómo encontrar elementos por id (conectores, gráficos). */
+export function getItemResolver() {
+  return resolver;
+}
+
 export function setItemResolver(fn: Resolver) {
   resolver = fn;
 }

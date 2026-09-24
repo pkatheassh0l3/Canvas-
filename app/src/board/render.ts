@@ -3,7 +3,7 @@ import { getStroke } from 'perfect-freehand';
 import type { BoxItem, DocItem, Item, NoteItem, Rect, StrokeData, TextItem } from '../types';
 import { assetImage } from '../assets';
 import { boxBounds, drawBox } from './items';
-import { connectorBounds, setBoundsFn } from './extra';
+import { connectorBounds, getItemResolver, setBoundsFn, setItemResolver } from './extra';
 
 const pathCache = new WeakMap<StrokeData, Path2D>();
 const boundsCache = new WeakMap<object, Rect>();
@@ -295,6 +295,37 @@ export function noteScale(n: NoteItem) {
   return Math.min(n.w / n.baseW, n.h / n.baseH);
 }
 
+/** Hasta dónde llega el dibujo del post-it (en sus coordenadas de dibujo). */
+const noteExtentCache = new WeakMap<object, [number, number]>();
+function noteExtent(n: NoteItem): [number, number] {
+  const c = noteExtentCache.get(n.strokes);
+  if (c) return c;
+  let mx = 0;
+  let my = 0;
+  for (const st of n.strokes) {
+    const r = st.size / 2 + 4; // margen: la punta del trazo es algo más ancha que el grosor
+    for (let i = 0; i < st.pts.length; i += 3) {
+      if (st.pts[i] + r > mx) mx = st.pts[i] + r;
+      if (st.pts[i + 1] + r > my) my = st.pts[i + 1] + r;
+    }
+  }
+  const out: [number, number] = [mx, my];
+  noteExtentCache.set(n.strokes, out);
+  return out;
+}
+
+/**
+ * Cambia la forma del post-it: su zona de dibujo pasa a tener la forma nueva, así que en el editor
+ * se puede dibujar en todo el espacio. El dibujo conserva su tamaño; solo se reduce si ya no cabe entero.
+ */
+export function reshapeNote(n: NoteItem, w: number, h: number): NoteItem {
+  const [ex, ey] = noteExtent(n);
+  let s = noteScale(n);
+  if (ex > 0 && ex * s > w) s = w / ex;
+  if (ey > 0 && ey * s > h) s = h / ey;
+  return { ...n, w, h, baseW: w / s, baseH: h / s };
+}
+
 export function drawNote(ctx: CanvasRenderingContext2D, n: NoteItem, zoom = 1, opts: { hideText?: boolean } = {}) {
   ctx.save();
   // sombra (barata: rectángulo desplazado cuando el zoom es pequeño)
@@ -354,8 +385,20 @@ export function paintOrder(items: Item[]): Item[] {
 
 /** Renderiza un conjunto de elementos a un canvas (miniaturas / exportar PNG). */
 export function renderToCanvas(items: Item[], maxSize: number, bg = '#faf9f6', pad = 40): HTMLCanvasElement | null {
-  let r: Rect | null = null;
   items = items.filter((i) => i.kind !== 'layer' && i.kind !== 'bookmark' && i.kind !== 'comment');
+  // los conectores buscan sus extremos entre estos elementos (p.ej. una plantilla que aún no está en ninguna pizarra)
+  const prev = getItemResolver();
+  const byId = new Map(items.map((i) => [i.id, i]));
+  setItemResolver((id) => byId.get(id) ?? prev(id));
+  try {
+    return paint(items, maxSize, bg, pad);
+  } finally {
+    setItemResolver(prev);
+  }
+}
+
+function paint(items: Item[], maxSize: number, bg: string, pad: number): HTMLCanvasElement | null {
+  let r: Rect | null = null;
   for (const it of items) {
     const b = itemBounds(it);
     r = r ? unionR(r, b) : { ...b };
@@ -371,7 +414,8 @@ export function renderToCanvas(items: Item[], maxSize: number, bg = '#faf9f6', p
   ctx.fillRect(0, 0, c.width, c.height);
   ctx.scale(scale, scale);
   ctx.translate(-r.x, -r.y);
-  for (const it of paintOrder([...items].sort((a, b) => a.z - b.z))) drawItem(ctx, it, scale);
+  // se dibuja como a zoom 1: títulos de marcos y grosores proporcionados, y sin omitir detalles pequeños
+  for (const it of paintOrder([...items].sort((a, b) => a.z - b.z))) drawItem(ctx, it, 1);
   return c;
 }
 

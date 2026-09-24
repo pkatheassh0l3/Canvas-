@@ -25,6 +25,8 @@ const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
 const TRASH_DIR = path.join(DATA_DIR, 'trash');
 const ASSETS_DIR = path.join(DATA_DIR, 'assets'); // imágenes, PDF, audio y vídeo
 const HISTORY_DIR = path.join(DATA_DIR, 'history'); // versiones anteriores de cada proyecto
+const TEMPLATES_DIR = path.join(DATA_DIR, 'templates'); // plantillas personalizadas
+const FOLDERS_DIR = path.join(DATA_DIR, 'folders'); // carpetas de cada usuario para organizar sus proyectos
 const SNAPSHOT_EVERY = Number(process.env.CANVAS_SNAPSHOT_MIN || 10) * 60 * 1000;
 const MAX_AUTO_SNAPSHOTS = 150;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -34,6 +36,8 @@ fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 fs.mkdirSync(TRASH_DIR, { recursive: true });
 fs.mkdirSync(ASSETS_DIR, { recursive: true });
 fs.mkdirSync(HISTORY_DIR, { recursive: true });
+fs.mkdirSync(TEMPLATES_DIR, { recursive: true });
+fs.mkdirSync(FOLDERS_DIR, { recursive: true });
 
 const auth = createAuth(DATA_DIR, TOKEN);
 if (!TOKEN && !auth.hasUsers) console.warn('[canvas++] AVISO: sin CANVAS_TOKEN ni usuarios, el servidor no pide autenticación.');
@@ -495,6 +499,84 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----- historial y compartir -----
+    // ----- carpetas: cada usuario organiza sus proyectos (y los compartidos con él) a su manera -----
+    if (url.pathname === '/api/folders') {
+      const file = path.join(FOLDERS_DIR, `${who.user?.id || 'legacy'}.json`);
+      if (req.method === 'GET') {
+        const data = await fsp.readFile(file, 'utf8').then(JSON.parse, () => ({ folders: [], assign: {}, updatedAt: 0 }));
+        return send(res, 200, data);
+      }
+      if (req.method === 'PUT') {
+        const body = await readBody(req, 2 * 1024 * 1024);
+        const folders = (Array.isArray(body.folders) ? body.folders : [])
+          .filter((f) => f && ID_RE.test(String(f.id)))
+          .slice(0, 2000)
+          .map((f) => ({ id: String(f.id), name: String(f.name || 'Carpeta').slice(0, 80), parent: f.parent && ID_RE.test(String(f.parent)) ? String(f.parent) : null, color: String(f.color || '').slice(0, 20) }));
+        const ids = new Set(folders.map((f) => f.id));
+        const assign = {};
+        for (const [pid, fid] of Object.entries(body.assign || {})) if (ID_RE.test(pid) && ids.has(String(fid))) assign[pid] = String(fid);
+        const data = { folders, assign, updatedAt: Date.now() };
+        await fsp.writeFile(file + '.tmp', JSON.stringify(data));
+        await fsp.rename(file + '.tmp', file);
+        return send(res, 200, data);
+      }
+      return send(res, 405, { error: 'método no permitido' });
+    }
+
+    // ----- plantillas personalizadas (de cada usuario; pueden compartirse con todos) -----
+    const tm = url.pathname.match(/^\/api\/templates(?:\/([^/]+))?$/);
+    if (tm) {
+      const me = who.user?.id || 'legacy';
+      const file = (id) => path.join(TEMPLATES_DIR, `${id}.json`);
+      const read = async (id) => JSON.parse(await fsp.readFile(file(id), 'utf8'));
+      const visible = (t) => t.owner === me || t.shared || who.legacy;
+      const summary = (t) => {
+        const owner = auth.byId(t.owner);
+        return { id: t.id, name: t.name, category: t.category, thumb: t.thumb, shared: !!t.shared, createdAt: t.createdAt, mine: t.owner === me || !!who.legacy, ownerName: owner?.name, count: t.items.length };
+      };
+      if (!tm[1] && req.method === 'GET') {
+        const out = [];
+        for (const f of (await fsp.readdir(TEMPLATES_DIR)).filter((f) => f.endsWith('.json'))) {
+          const t = await read(f.slice(0, -5)).catch(() => null);
+          if (t && visible(t)) out.push(summary(t));
+        }
+        return send(res, 200, out.sort((a, b) => b.createdAt - a.createdAt));
+      }
+      if (!tm[1] && req.method === 'POST') {
+        const body = await readBody(req);
+        if (!Array.isArray(body.items) || !body.items.length) return send(res, 400, { error: 'La plantilla está vacía' });
+        const t = {
+          id: crypto.randomBytes(9).toString('base64url'),
+          name: String(body.name || 'Plantilla').slice(0, 80),
+          category: String(body.category || '').slice(0, 40),
+          thumb: typeof body.thumb === 'string' && body.thumb.startsWith('data:image/') && body.thumb.length < 400000 ? body.thumb : '',
+          shared: !!body.shared,
+          owner: me,
+          createdAt: Date.now(),
+          items: body.items.filter((i) => i && typeof i.id === 'string' && !i.deleted),
+        };
+        await fsp.writeFile(file(t.id), JSON.stringify(t));
+        return send(res, 201, summary(t));
+      }
+      if (!tm[1] || !ID_RE.test(tm[1])) return send(res, 404, { error: 'no encontrado' });
+      const t = await read(tm[1]).catch(() => null);
+      if (!t || !visible(t)) return send(res, 404, { error: 'La plantilla no existe' });
+      if (req.method === 'GET') return send(res, 200, { ...summary(t), items: t.items });
+      if (t.owner !== me && !who.legacy && who.user?.role !== 'admin') return send(res, 403, { error: 'Solo quien la creó puede cambiarla' });
+      if (req.method === 'PATCH') {
+        const body = await readBody(req, 64 * 1024);
+        if (typeof body.name === 'string' && body.name.trim()) t.name = body.name.trim().slice(0, 80);
+        if (typeof body.shared === 'boolean') t.shared = body.shared;
+        await fsp.writeFile(file(t.id), JSON.stringify(t));
+        return send(res, 200, summary(t));
+      }
+      if (req.method === 'DELETE') {
+        await fsp.rm(file(t.id), { force: true });
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 405, { error: 'método no permitido' });
+    }
+
     // ----- personas con acceso a un proyecto -----
     const mm = url.pathname.match(/^\/api\/projects\/([^/]+)\/members(?:\/([^/]+))?$/);
     if (mm) {

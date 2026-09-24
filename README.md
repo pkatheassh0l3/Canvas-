@@ -10,7 +10,21 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
 - **Lápiz con presión** (S-Pen, Wacom, Surface Pen…), rotulador y borrador. El extremo borrador o el botón lateral del lápiz borran.
 - **Modo lápiz** para evitar toques con la palma: el lápiz dibuja y el dedo mueve y hace zoom. Se activa solo la primera vez que se detecta un lápiz.
 - **Post-its con sketch**: con la herramienta Post-it tocas la pizarra y se abre un lienzo grande donde dibujar. También puedes seleccionar trazos ya dibujados y pulsar **Hacer post-it** para convertirlos en una nota.
-- Post-its con texto, 7 colores, redimensionables y movibles.
+- Post-its con texto, 7 colores, redimensionables y movibles. Al cambiarles la forma (más anchos, más altos…), la zona de dibujo adopta la forma nueva: el dibujo conserva su tamaño y en el editor se puede dibujar en todo el espacio. Solo se reduce si deja de caber.
+- **Carpetas** para organizar los proyectos:
+  - Se pueden anidar, tienen color y se navega por ellas con migas de pan.
+  - Para mover un proyecto, arrástralo a una carpeta o usa el botón de carpeta de su tarjeta (así también en tablet).
+  - Cada cuenta tiene sus propias carpetas, sincronizadas por el NAS; los proyectos compartidos contigo también se pueden organizar.
+  - Al borrar una carpeta no se pierde nada: su contenido sube a la carpeta de arriba.
+- **Plantillas al crear un proyecto**: en blanco o una de las 50 plantillas, en 7 categorías:
+  - Planificación (Kanban, semanal, mensual, diario, hoja de ruta, Gantt, OKR, plan de proyecto).
+  - Ideas (lluvia de ideas, mapa mental, afinidad, Crazy 8, storyboard, moodboard, SCAMPER).
+  - Análisis (DAFO, Eisenhower, impacto/esfuerzo, pros y contras, Business Model Canvas, Lean Canvas, mapa de empatía, customer journey, 5 porqués, espina de pescado, competidores, árbol de decisión).
+  - Reuniones (retrospectiva, empezar-dejar-seguir, acta, daily, preguntas).
+  - Diagramas (flujo, organigrama, línea de tiempo, Venn, ciclo, pirámide, bocetos de app/web, mapa del sitio).
+  - Estudio (Cornell, mapa conceptual, tarjetas, comparativa, plan de estudio).
+  - Personal (hábitos, objetivos del año, viaje, diario, menú y compra).
+- **Plantillas personalizadas**: menú ⋯ → *Guardar como plantilla* guarda la pizarra entera o lo seleccionado (con el contenido de los marcos elegidos). Se guardan en el NAS y pueden compartirse con todos los usuarios.
 - **Varios proyectos**, con miniatura, renombrar y eliminar.
 - **Sincronización en tiempo real** por WebSocket. Si se pierde la conexión se sigue trabajando y los cambios se suben al volver.
 - **Botón Insertar (+)** en la barra inferior, con todo lo que se puede añadir a la pizarra:
@@ -28,7 +42,6 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
   - **Fórmula**: se escribe en LaTeX con vista previa y botones rápidos (fracción, raíz, integral, matriz…). Se renderiza con MathJax sin conexión.
   - **Código**: bloque con resaltado de sintaxis (JavaScript, TypeScript, Python, Java, Kotlin, C/C++, SQL, Bash, CSS, HTML, JSON).
   - **Gráfico**: se crea desde una tabla (barras, líneas o circular) y se actualiza solo al cambiar la tabla.
-  - **Plantillas**: Kanban, Retrospectiva, Semana, Matriz de Eisenhower, Mapa mental, Diagrama de flujo y Lluvia de ideas.
   - **Emojis y stickers** y **comentarios**.
 - **Cuadros de texto** (herramienta **T**): tocas la pizarra y escribes. Se pueden mover, cambiar de color y de tamaño, y editar con doble toque. Pegar texto crea un cuadro de texto.
 - **Organizar**:
@@ -173,7 +186,7 @@ CANVAS_DATA=./data CANVAS_TOKEN=dev node index.js
 | `CANVAS_PUBLIC` | `./public` | Cliente web que se sirve |
 | `CANVAS_SNAPSHOT_MIN` | `10` | Minutos entre copias automáticas del historial |
 
-Estructura de `/data`: `users.json` (cuentas, con contraseñas cifradas con scrypt), `secret.key` (firma de las sesiones), `projects/` (un JSON por proyecto), `assets/` (imágenes, PDF, audio y vídeo), `history/<proyecto>/` (versiones comprimidas) y `trash/` (proyectos borrados).
+Estructura de `/data`: `users.json` (cuentas, con contraseñas cifradas con scrypt), `secret.key` (firma de las sesiones), `projects/` (un JSON por proyecto), `assets/` (imágenes, PDF, audio y vídeo), `history/<proyecto>/` (versiones comprimidas), `templates/` (plantillas personalizadas), `folders/` (carpetas de cada usuario) y `trash/` (proyectos borrados).
 
 ## API
 
@@ -183,6 +196,8 @@ Estructura de `/data`: `users.json` (cuentas, con contraseñas cifradas con scry
   - `POST /api/auth/login {username, password}` y `POST /api/auth/register`: devuelven `{token, user}`. El token de sesión se envía como `Authorization: Bearer …`.
   - `GET|PATCH /api/auth/me`, `POST /api/auth/password {old, password}` y `POST /api/auth/logout-all`.
 - `GET|POST /api/users` y `PATCH|DELETE /api/users/:id`: gestión de usuarios (solo administrador). Los demás solo pueden listar nombres para compartir.
+- `GET|POST /api/templates`, `GET|PATCH|DELETE /api/templates/:id`: plantillas personalizadas (`{name, category, thumb, shared, items}`).
+- `GET|PUT /api/folders`: carpetas de la cuenta (`{folders: [{id, name, parent, color}], assign: {proyecto: carpeta}}`).
 - `GET|POST /api/projects/:id/members {username, access: edit|view}` y `DELETE /api/projects/:id/members/:userId`: personas con acceso. Solo el propietario comparte; cada persona puede quitarse a sí misma.
 - `GET|POST /api/projects`: listar y crear. `POST {id, name, items?}` sube proyectos creados sin conexión.
 - `GET|PATCH|DELETE /api/projects/:id`

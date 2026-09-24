@@ -70,6 +70,9 @@ async function openProject(meta: ProjectMeta) {
   board = new BoardView(doc, meta, showHome, meta.access === 'view' ? { readOnly: true, member: true } : {});
   history.pushState(null, '', '#' + meta.id);
   app.replaceChildren(board.root);
+  // primera vez que se abre (p.ej. recién creado con una plantilla): se encuadra todo el contenido
+  const b = board;
+  if (items.length && !localStorage.getItem('canvaspp.view.' + meta.id)) requestAnimationFrame(() => requestAnimationFrame(() => b.fitContent()));
   (window as any).__board = board; // útil para depurar
 }
 
