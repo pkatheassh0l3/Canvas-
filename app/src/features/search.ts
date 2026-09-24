@@ -1,4 +1,5 @@
 // Búsqueda de texto en toda la pizarra (textos, post-its, documentos, PDF, tablas, tareas, código…).
+import { computeTable } from '../sheet/format';
 import type { BoardView } from '../board/boardView';
 import type { Item } from '../types';
 import { h } from '../util';
@@ -46,7 +47,7 @@ export function searchable(it: Item): { text: string; page?: number }[] {
     case 'pdf':
       return [{ text: it.title }, ...(it.text ?? []).map((t, i) => ({ text: t, page: i + 1 }))];
     case 'table':
-      return [{ text: it.cells.map((r) => r.join(' · ')).join('\n') }];
+      return [{ text: computeTable(it).text.map((r) => r.join(' · ')).join('\n') }];
     case 'todo':
       return [{ text: it.title }, ...it.items.map((i) => ({ text: i.t }))];
     case 'link':

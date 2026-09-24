@@ -1,4 +1,6 @@
 // Elementos adicionales: conectores, notas de voz, vídeos, fórmulas, código, gráficos y comentarios.
+import { computeTable } from '../sheet/format';
+import { parseInput } from '../sheet/formula';
 import type {
   AudioItem,
   ChartItem,
@@ -441,17 +443,29 @@ export const CHART_COLORS = ['#0090ff', '#f76b15', '#30a46c', '#8e4ec6', '#e5484
 
 export function chartData(ch: ChartItem): { labels: string[]; series: { name: string; values: number[] }[] } {
   let data = ch.data;
+  let vals: unknown[][] | null = null;
   if (ch.table) {
     const t = resolver(ch.table);
-    if (t && !t.deleted && t.kind === 'table') data = t.cells;
+    if (t && !t.deleted && t.kind === 'table') {
+      // valores ya calculados (las fórmulas cuentan)
+      const c = computeTable(t);
+      data = c.text;
+      vals = c.values;
+    }
   }
   if (!data.length) return { labels: [], series: [] };
   const header = data[0];
-  const rows = data.slice(1).filter((r) => r.some((c) => c.trim()));
-  const labels = rows.map((r) => r[0] ?? '');
+  const rowIdx = data.map((_, i) => i).filter((i) => i > 0 && data[i].some((c) => String(c ?? '').trim()));
+  const labels = rowIdx.map((i) => data[i][0] ?? '');
   const series: { name: string; values: number[] }[] = [];
+  const num = (i: number, ci: number) => {
+    const v = vals?.[i]?.[ci];
+    if (typeof v === 'number') return v;
+    const p = parseInput(String(data[i][ci] ?? '')).v;
+    return typeof p === 'number' ? p : NaN;
+  };
   for (let ci = 1; ci < header.length; ci++) {
-    const values = rows.map((r) => parseFloat(String(r[ci] ?? '').replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '')));
+    const values = rowIdx.map((i) => num(i, ci));
     if (values.some((v) => !isNaN(v))) series.push({ name: header[ci] || `Serie ${ci}`, values: values.map((v) => (isNaN(v) ? 0 : v)) });
   }
   return { labels, series };

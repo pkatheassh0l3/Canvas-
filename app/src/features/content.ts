@@ -1,4 +1,5 @@
 // Bloques de código, gráficos a partir de tablas y emojis/stickers.
+import { computeTable } from '../sheet/format';
 import type { BoardView } from '../board/boardView';
 import type { ChartItem, ChartKind, CodeItem, TableItem, TextItem } from '../types';
 import { h, toast, uid } from '../util';
@@ -92,7 +93,7 @@ export function createChart(b: BoardView, t: TableItem) {
     h: w * 0.65,
     chart: 'bar',
     table: t.id,
-    data: t.cells.map((r) => [...r]),
+    data: computeTable(t).text.map((r) => [...r]),
     title: t.cells[0]?.slice(1).join(', ') || 'Gráfico',
   };
   b.doc.add([ch]);

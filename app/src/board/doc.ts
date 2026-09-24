@@ -131,6 +131,13 @@ export class BoardDoc {
     this.commit(items, false);
   }
 
+  /** Añade a deshacer un cambio ya aplicado (p.ej. todo lo editado en la hoja de cálculo como un solo paso). */
+  pushUndo(before: Item, after: Item) {
+    this.undoStack.push([{ before, after }]);
+    if (this.undoStack.length > 200) this.undoStack.shift();
+    this.redoStack = [];
+  }
+
   canUndo() {
     return this.undoStack.length > 0;
   }

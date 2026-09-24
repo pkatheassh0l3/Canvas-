@@ -79,7 +79,20 @@ export interface ImageItem extends BaseItem {
   asset: string;
 }
 
-/** Tabla sencilla (texto por celda). */
+/** Formato de una celda de tabla. */
+export interface CellFmt {
+  b?: boolean; // negrita
+  i?: boolean; // cursiva
+  u?: boolean; // subrayado
+  s?: boolean; // tachado
+  color?: string; // color del texto
+  bg?: string; // relleno
+  al?: 'left' | 'center' | 'right';
+  nf?: 'general' | 'number' | 'currency' | 'percent' | 'date' | 'datetime' | 'time' | 'text';
+  dec?: number; // decimales
+}
+
+/** Tabla / hoja de cálculo. Las celdas guardan lo escrito ("=SUMA(A1:A3)" en las fórmulas). */
 export interface TableItem extends BaseItem {
   kind: 'table';
   x: number;
@@ -89,6 +102,8 @@ export interface TableItem extends BaseItem {
   cells: string[][]; // [fila][columna]
   header: boolean; // primera fila como cabecera
   fs: number; // tamaño de letra en unidades del mundo
+  fmt?: Record<string, CellFmt>; // "fila,columna" → formato
+  colW?: number[]; // ancho relativo de cada columna (1 = normal)
 }
 
 export type ShapeKind = 'rect' | 'ellipse' | 'diamond' | 'triangle' | 'line' | 'arrow';

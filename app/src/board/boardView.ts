@@ -66,7 +66,8 @@ import {
   TODO_BASE_W,
   todoCheckAt,
 } from './items';
-import { editTable, editTodo } from './editors';
+import { editTodo } from './editors';
+import { openSheetEditor } from '../sheet/editor';
 import { importPdfFile } from '../pdf/import';
 import { addAsset, downscaleImage, imageSize, uploadPending } from '../assets';
 import { platform } from '../updates';
@@ -1749,6 +1750,7 @@ export class BoardView {
       else if (it.kind === 'video') openVideo(it);
       else if (it.kind === 'audio') this.toggleAudio(it);
       else if (it.kind === 'link') this.openExternal(it.url);
+      else if (it.kind === 'table') this.editTableItem(it.id);
       return;
     }
     if (it.kind === 'note') this.editNote(it.id);
@@ -1859,14 +1861,31 @@ export class BoardView {
     this.editTableItem(t.id);
   }
 
+  /** Hoja de cálculo a pantalla completa. Guarda en vivo; al cerrar, todo lo editado se deshace de una vez. */
   async editTableItem(id: string) {
     const t = this.doc.get(id);
     if (t?.kind !== 'table' || this.editing) return;
     this.editing = true;
-    const r = await editTable(t);
+    const before = t;
+    const r = await openSheetEditor(t, {
+      readOnly: this.readOnly,
+      onChange: (s) => {
+        const cur = this.doc.get(id);
+        if (cur?.kind === 'table') this.doc.commit([{ ...cur, cells: s.cells, fmt: s.fmt, colW: s.colW, header: s.header }], false);
+      },
+      subscribe: (fn) =>
+        this.doc.subscribe((ids) => {
+          if (ids && !ids.has(id)) return;
+          const cur = this.doc.get(id);
+          if (cur?.kind === 'table' && cur.by !== settings.clientId) fn(cur);
+        }),
+    });
     this.editing = false;
     const cur = this.doc.get(id);
-    if (r && cur?.kind === 'table') this.doc.commit([{ ...cur, cells: r.cells, header: r.header }]);
+    if (!this.readOnly && cur?.kind === 'table' && JSON.stringify([r.cells, r.fmt, r.colW, r.header]) !== JSON.stringify([before.cells, before.fmt ?? {}, before.colW ?? [], before.header])) {
+      this.doc.pushUndo(before, cur);
+      this.refreshUI();
+    }
   }
 
   insertTodo() {

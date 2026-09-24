@@ -16,9 +16,12 @@ import type {
 import { assetImage } from '../assets';
 import { drawStroke, getRedrawHook, sheet, wrapText } from './render';
 import { drawExtra, extraBounds } from './extra';
+import { alignOf, computeTable, fmtOf } from '../sheet/format';
+import { isErr } from '../sheet/formula';
+const isErrValue = (v: unknown) => isErr(v);
 
-const FONT = (w: number, px: number) => `${w} ${px}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
-const layoutCache = new WeakMap<object, { rows: number[]; h: number; lines: string[][][] }>();
+const FONT = (w: number, px: number, italic?: boolean) => `${italic ? 'italic ' : ''}${w} ${px}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+const layoutCache = new WeakMap<object, { rows: number[]; h: number; lines: string[][][]; xs?: number[] }>();
 let mctx: CanvasRenderingContext2D | null = null;
 const measure = () => (mctx ??= document.createElement('canvas').getContext('2d')!);
 
@@ -38,31 +41,49 @@ export function resizeMode(it: BoxItem): 'free' | 'aspect' | 'width' | 'endpoint
 // ------------------------------------------------------------------ tablas
 export const TABLE_PAD = 0.45; // en múltiplos del tamaño de letra
 
+/** Posición x de cada columna (según los anchos relativos colW). */
+export function tableCols(t: TableItem): number[] {
+  const cols = Math.max(1, ...t.cells.map((r) => r.length));
+  const wts = Array.from({ length: cols }, (_, i) => Math.max(0.2, t.colW?.[i] ?? 1));
+  const total = wts.reduce((a, b) => a + b, 0);
+  const xs = [0];
+  for (const w of wts) xs.push(xs[xs.length - 1] + (w / total) * t.w);
+  return xs;
+}
+
 export function tableLayout(t: TableItem) {
   const c = layoutCache.get(t);
   if (c) return c;
   const ctx = measure();
-  const cols = Math.max(1, t.cells[0]?.length ?? 1);
-  const colW = t.w / cols;
+  const xs = tableCols(t);
   const pad = t.fs * TABLE_PAD;
   const lh = t.fs * 1.3;
+  const { text, values } = computeTable(t);
   const rows: number[] = [];
   const lines: string[][][] = [];
   t.cells.forEach((row, ri) => {
-    ctx.font = FONT(ri === 0 && t.header ? 650 : 400, t.fs);
-    const rl = row.map((cell) => wrapText(ctx, cell || '', Math.max(10, colW - pad * 2)));
+    const rl = row.map((_, ci) => {
+      const f = fmtOf(t, ri, ci);
+      const v = values[ri]?.[ci];
+      const s = text[ri]?.[ci] || '';
+      // números, fechas y errores no se parten en varias líneas (como en Excel)
+      if (typeof v === 'number' || typeof v === 'boolean' || isErrValue(v)) return s ? [s] : [];
+      ctx.font = FONT(f.b || (ri === 0 && t.header) ? 650 : 400, t.fs, f.i);
+      return wrapText(ctx, s, Math.max(10, xs[ci + 1] - xs[ci] - pad * 2));
+    });
     lines.push(rl);
     rows.push(Math.max(1, ...rl.map((l) => l.length)) * lh + pad * 2);
   });
-  const res = { rows, h: rows.reduce((a, b) => a + b, 0), lines };
+  const res = { rows, h: rows.reduce((a, b) => a + b, 0), lines, xs };
   layoutCache.set(t, res);
   return res;
 }
 
 function drawTable(ctx: CanvasRenderingContext2D, t: TableItem, zoom: number) {
   const L = tableLayout(t);
-  const cols = Math.max(1, t.cells[0]?.length ?? 1);
-  const colW = t.w / cols;
+  const { values } = computeTable(t);
+  const xs = L.xs ?? tableCols(t);
+  const cols = xs.length - 1;
   const pad = t.fs * TABLE_PAD;
   const lh = t.fs * 1.3;
   ctx.fillStyle = '#fff';
@@ -71,13 +92,62 @@ function drawTable(ctx: CanvasRenderingContext2D, t: TableItem, zoom: number) {
     ctx.fillStyle = '#f1efe9';
     ctx.fillRect(t.x, t.y, t.w, L.rows[0]);
   }
+  // rellenos de celda
+  let y0 = t.y;
+  L.rows.forEach((rh, ri) => {
+    for (let ci = 0; ci < cols; ci++) {
+      const bg = t.fmt?.[`${ri},${ci}`]?.bg;
+      if (bg) {
+        ctx.fillStyle = bg;
+        ctx.fillRect(t.x + xs[ci], y0, xs[ci + 1] - xs[ci], rh);
+      }
+    }
+    y0 += rh;
+  });
   ctx.textBaseline = 'top';
   let y = t.y;
   L.lines.forEach((row, ri) => {
     if (zoom * t.fs > 3) {
-      ctx.font = FONT(ri === 0 && t.header ? 650 : 400, t.fs);
-      ctx.fillStyle = '#1f2328';
-      row.forEach((cl, ci) => cl.forEach((l, li) => ctx.fillText(l, t.x + ci * colW + pad, y + pad + li * lh + (lh - t.fs) / 2)));
+      row.forEach((cl, ci) => {
+        const f = fmtOf(t, ri, ci);
+        const al = alignOf(values[ri]?.[ci] ?? null, f);
+        ctx.font = FONT(f.b || (ri === 0 && t.header) ? 650 : 400, t.fs, f.i);
+        ctx.fillStyle = f.color || (isErrValue(values[ri]?.[ci]) ? '#c62828' : '#1f2328');
+        ctx.textAlign = al;
+        const x = al === 'left' ? t.x + xs[ci] + pad : al === 'right' ? t.x + xs[ci + 1] - pad : t.x + (xs[ci] + xs[ci + 1]) / 2;
+        // el texto no se sale de su celda
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(t.x + xs[ci], y, xs[ci + 1] - xs[ci], L.rows[ri]);
+        ctx.clip();
+        const v = values[ri]?.[ci];
+        const single = typeof v === 'number' || typeof v === 'boolean' || isErrValue(v);
+        cl.forEach((l, li) => {
+          const ty = y + pad + li * lh + (lh - t.fs) / 2;
+          if (single) {
+            // un número que no cabe se reduce; si ni así cabe, ### (como en Excel)
+            const avail = xs[ci + 1] - xs[ci] - pad * 2;
+            const w = ctx.measureText(l).width;
+            if (w > avail) {
+              const k = avail / w;
+              if (k >= 0.55) {
+                ctx.font = FONT(f.b || (ri === 0 && t.header) ? 650 : 400, t.fs * k, f.i);
+                ctx.fillText(l, x, ty + (t.fs * (1 - k)) / 2);
+              } else ctx.fillText('#'.repeat(Math.max(1, Math.floor(avail / (t.fs * 0.6)))), x, ty);
+              return;
+            }
+          }
+          ctx.fillText(l, x, ty);
+          if (f.u || f.s) {
+            const w = ctx.measureText(l).width;
+            const lx = al === 'left' ? x : al === 'right' ? x - w : x - w / 2;
+            const ly = f.u ? ty + t.fs * 1.02 : ty + t.fs * 0.55;
+            ctx.fillRect(lx, ly, w, Math.max(1 / zoom, t.fs * 0.07));
+          }
+        });
+        ctx.restore();
+      });
+      ctx.textAlign = 'left';
     }
     y += L.rows[ri];
   });
@@ -92,8 +162,8 @@ function drawTable(ctx: CanvasRenderingContext2D, t: TableItem, zoom: number) {
     yy += L.rows[r] ?? 0;
   }
   for (let c = 0; c <= cols; c++) {
-    ctx.moveTo(t.x + c * colW, t.y);
-    ctx.lineTo(t.x + c * colW, t.y + L.h);
+    ctx.moveTo(t.x + xs[c], t.y);
+    ctx.lineTo(t.x + xs[c], t.y + L.h);
   }
   ctx.stroke();
 }

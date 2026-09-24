@@ -2281,3 +2281,354 @@ button.list-main {
 .card[draggable='true'] {
   -webkit-user-drag: element;
 }
+
+/* ---------- hoja de cálculo ---------- */
+.ss-root {
+  background: #fff;
+}
+.ss-title {
+  font-size: 15px;
+}
+.ss-toolbar {
+  flex-wrap: wrap;
+}
+.ss-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.ss-swatches {
+  display: grid;
+  grid-template-columns: repeat(4, 30px);
+  gap: 2px;
+}
+.sw.none::after {
+  background: linear-gradient(135deg, #fff 45%, #e5484d 45%, #e5484d 55%, #fff 55%);
+}
+.ss-fbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfaf8;
+}
+.ss-name {
+  width: 110px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 8px;
+  font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: uppercase;
+}
+.ss-fx {
+  font: italic 600 15px Georgia, serif;
+  color: var(--muted);
+  padding: 0 4px;
+}
+.ss-bar-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.ss-bar {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  font: 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ss-bar:focus,
+.ss-name:focus {
+  outline: 2px solid var(--accent);
+  border-color: transparent;
+}
+.ss-scroll {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  outline: none;
+  background: #fff;
+}
+.ss-inner {
+  position: relative;
+  width: max-content;
+}
+.ss-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  font: 14px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ss-table th {
+  position: sticky;
+  background: #f4f3ef;
+  color: #6b6f76;
+  font-weight: 500;
+  font-size: 12px;
+  border-right: 1px solid #dedbd3;
+  border-bottom: 1px solid #dedbd3;
+  z-index: 2;
+}
+.ss-table thead th {
+  top: 0;
+  height: 26px;
+  z-index: 3;
+}
+.ss-table .ss-rh {
+  left: 0;
+  text-align: center;
+}
+.ss-table .ss-corner {
+  left: 0;
+  z-index: 4;
+  cursor: pointer;
+}
+.ss-table th.on {
+  background: #dde9ff;
+  color: #1d4fa6;
+  font-weight: 650;
+}
+.ss-ch {
+  position: relative;
+  cursor: s-resize;
+}
+.ss-rh {
+  cursor: e-resize;
+}
+.ss-resize {
+  position: absolute;
+  right: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+}
+.ss-table td {
+  border-right: 1px solid #ebe9e3;
+  border-bottom: 1px solid #ebe9e3;
+  padding: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  cursor: cell;
+  color: #1f2328;
+}
+.ss-table td.a-right {
+  text-align: right;
+}
+.ss-table td.a-center {
+  text-align: center;
+}
+.ss-table td.b {
+  font-weight: 650;
+}
+.ss-table td.i {
+  font-style: italic;
+}
+.ss-table td.u {
+  text-decoration: underline;
+}
+.ss-table td.s {
+  text-decoration: line-through;
+}
+.ss-table td.u.s {
+  text-decoration: underline line-through;
+}
+.ss-table td.err {
+  color: #c62828;
+}
+.ss-table td.hdr {
+  background: #f7f6f2;
+}
+.ss-sel,
+.ss-active,
+.ss-fill,
+.ss-fillprev,
+.ss-ref {
+  position: absolute;
+  pointer-events: none;
+}
+.ss-sel.multi {
+  background: rgba(0, 144, 255, 0.1);
+  outline: 1px solid rgba(0, 144, 255, 0.6);
+}
+.ss-active {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  z-index: 1;
+}
+.ss-fill {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border: 1px solid #fff;
+  pointer-events: auto;
+  cursor: crosshair;
+  z-index: 2;
+}
+.ss-fill.hidden {
+  display: none;
+}
+.ss-fillprev {
+  outline: 2px dashed #6b6f76;
+  outline-offset: -1px;
+}
+.ss-ref {
+  outline: 2px solid var(--rc);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--rc) 10%, transparent);
+}
+.ss-edit {
+  position: absolute;
+  z-index: 6;
+  margin: 0;
+  border: 2px solid var(--accent);
+  padding: 3px 5px;
+  font: 14px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: #fff;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  outline: none;
+  line-height: 18px;
+}
+.ss-ac,
+.ss-hint {
+  z-index: 20;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+.ss-ac {
+  min-width: 300px;
+  max-width: 420px;
+  padding: 4px;
+}
+.ss-ac-item {
+  display: flex;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ss-ac-item b {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  min-width: 120px;
+}
+.ss-ac-item span {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ss-ac-item.on {
+  background: var(--accent-soft);
+}
+.ss-hint {
+  padding: 6px 10px;
+  max-width: 520px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ss-hint b {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+.ss-hint span {
+  color: var(--muted);
+}
+.ss-status {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 6px 14px max(6px, env(safe-area-inset-bottom));
+  font-size: 12.5px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  background: #fbfaf8;
+}
+.ss-ctx {
+  position: fixed;
+  z-index: 60;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  min-width: 240px;
+}
+.ss-ctx .mi {
+  padding: 7px 10px;
+  font-size: 13.5px;
+}
+.ss-fn-list {
+  max-height: 55vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+}
+.ss-fn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.ss-fn:hover {
+  background: var(--accent-soft);
+}
+.ss-fn b {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+.ss-fn span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.modal .row > input[type='text'] {
+  flex: 1;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 12px;
+  font: inherit;
+}
+.modal .row > select {
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 8px;
+  font: inherit;
+  background: #fff;
+}
+.ss-ro .ss-bar {
+  background: #f7f6f2;
+}
+@media (max-width: 700px) {
+  .ss-name {
+    width: 72px;
+  }
+  .ss-check {
+    display: none;
+  }
+}

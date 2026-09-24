@@ -20,6 +20,7 @@
     "@capacitor/share": "^8.0.2",
     "@tesseract.js-data/eng": "^1.0.0",
     "@tesseract.js-data/spa": "^1.0.0",
+    "exceljs": "^4.4.0",
     "html2canvas-pro": "^2.4.5",
     "idb-keyval": "^6.2.1",
     "jspdf": "^4.2.1",
@@ -64,5 +65,13 @@
   },
   "canvaspp": {
     "updateRepo": "pkatheassh0l3/Canvas-"
+  },
+  "overrides": {
+    "speech-rule-engine": {
+      "@xmldom/xmldom": "^0.9.12"
+    },
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   }
 }

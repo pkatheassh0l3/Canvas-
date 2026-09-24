@@ -11,6 +11,17 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
 - **Modo lápiz** para evitar toques con la palma: el lápiz dibuja y el dedo mueve y hace zoom. Se activa solo la primera vez que se detecta un lápiz.
 - **Post-its con sketch**: con la herramienta Post-it tocas la pizarra y se abre un lienzo grande donde dibujar. También puedes seleccionar trazos ya dibujados y pulsar **Hacer post-it** para convertirlos en una nota.
 - Post-its con texto, 7 colores, redimensionables y movibles. Al cambiarles la forma (más anchos, más altos…), la zona de dibujo adopta la forma nueva: el dibujo conserva su tamaño y en el editor se puede dibujar en todo el espacio. Solo se reduce si deja de caber.
+- **Tablas como hojas de cálculo** (se abren a pantalla completa, como el editor de documentos):
+  - **Fórmulas** con referencias (`A1`, `$A$1`, `A1:B5`, `A:A`) y 129 funciones. Se escriben en español o en inglés (`SUMA`/`SUM`, `SI`/`IF`, `BUSCARV`/`VLOOKUP`, `SUMAR.SI.CONJUNTO`, `FECHA`, `PAGO`, `TIR`…), con `;` o `,` entre argumentos.
+  - Al escribir una fórmula: autocompletado de funciones con su sintaxis, clic o arrastre sobre celdas para insertar referencias (se resaltan en colores) y F4 para `$`.
+  - Errores como en Excel (`#¡DIV/0!`, `#¡VALOR!`, `#N/D`…) y detección de referencias circulares.
+  - **Formato**: negrita, cursiva, subrayado, tachado, colores, relleno, alineación, número, moneda, porcentaje, fecha y hora, y decimales. Escribir `15%`, `12 €` o `24/09/2026` ya da ese formato.
+  - **Controlador de relleno** con series (números, días, meses, "Semana 1"…) y fórmulas que se ajustan. También Ctrl+D y Ctrl+R.
+  - Insertar y eliminar filas y columnas: las fórmulas se ajustan solas. Ordenar, autosuma, ancho de columnas (doble clic para ajustar) y menú contextual.
+  - **Copiar y pegar con Excel** y Google Sheets. Barra de estado con suma, promedio, recuento, mínimo y máximo de la selección. Deshacer y rehacer.
+  - **Importar y exportar**: Excel `.xlsx` (con fórmulas, formato y anchos) y CSV.
+  - **Edición en tiempo real**: si la misma tabla está abierta en dos sitios, cada uno ve los cambios del otro al momento y se mezclan celda a celda.
+  - En la pizarra la tabla muestra los valores calculados con su formato, y los gráficos usan esos valores.
 - **Carpetas** para organizar los proyectos:
   - Se pueden anidar, tienen color y se navega por ellas con migas de pan.
   - Para mover un proyecto, arrástralo a una carpeta o usa el botón de carpeta de su tarjeta (así también en tablet).
