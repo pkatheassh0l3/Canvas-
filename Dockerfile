@@ -12,7 +12,7 @@ WORKDIR /srv
 ENV NODE_ENV=production PORT=8787 CANVAS_DATA=/data
 COPY server/package*.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
-COPY server/index.js ./
+COPY server/*.js ./
 COPY --from=web /src/app/dist ./public
 VOLUME ["/data"]
 EXPOSE 8787
