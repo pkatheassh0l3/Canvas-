@@ -11,6 +11,7 @@ services:
     environment:
       # Cambia esto por una contraseña larga. La misma se pone en Ajustes de la app.
       CANVAS_TOKEN: "cambia-este-token"
+      # CANVAS_SIGNUP: "1"   # permite que cualquiera se cree una cuenta (si no, las crea el administrador)
     volumes:
       # Carpeta del NAS donde se guardan los proyectos (un JSON por proyecto).
       # Synology: p.ej. /volume1/docker/canvaspp:/data

@@ -282,6 +282,8 @@ button {
   box-shadow: var(--shadow);
   padding: 22px;
   width: min(480px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
 }
 .modal.small {
   width: min(380px, 100%);
@@ -1745,8 +1747,8 @@ button.list-main {
 .board.readonly [title^='Deshacer'],
 .board.readonly [title^='Rehacer'],
 .board.readonly [title^='Modo lápiz'],
-.board.readonly [title='Proyectos'],
-.board.readonly [title='Más'] {
+.board.readonly:not(.member) [title='Proyectos'],
+.board.readonly:not(.member) [title='Más'] {
   display: none !important;
 }
 .board.readonly .topbar .title::after {
@@ -1770,4 +1772,209 @@ button.list-main {
   background: #fff;
   filter: none;
   min-height: 0;
+}
+
+/* ---------- cuentas de usuario ---------- */
+.auth {
+  display: grid;
+  place-items: center;
+}
+.auth-card {
+  width: min(420px, 100%);
+  margin: 24px auto;
+}
+.auth-card .brand {
+  margin-bottom: 18px;
+}
+.auth-card h2 {
+  margin-bottom: 4px;
+}
+.auth-sub {
+  font-size: 14px;
+  margin-bottom: 16px !important;
+}
+.auth-card form .test-result {
+  min-height: 18px;
+  margin: -4px 0 10px;
+}
+.btn.wide {
+  width: 100%;
+  justify-content: center;
+}
+.auth-links {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+.linkish {
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+.linkish.muted {
+  color: var(--muted);
+  font-weight: 500;
+  margin-left: auto;
+}
+.avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.user-slot {
+  position: relative;
+}
+.avatar-btn {
+  border: 0;
+  padding: 3px;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+}
+.avatar-btn:hover {
+  background: #ecebe6;
+}
+.avatar-btn .avatar {
+  width: 36px;
+  height: 36px;
+}
+.acct-menu {
+  position: absolute;
+  right: 0;
+  top: 48px;
+  z-index: 40;
+  min-width: 220px;
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+.acct-head {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.projects {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.section-title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--muted);
+  margin: 8px 0 12px;
+}
+.projects .grid + .section-title {
+  margin-top: 28px;
+}
+.badge {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e8f1ff;
+  color: #1d5fbf;
+}
+.badge.ro {
+  background: #fff1d6;
+  color: #b25e09;
+}
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow: auto;
+  margin: 8px 0;
+}
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  border-radius: 10px;
+}
+.user-row:hover {
+  background: #f6f5f1;
+}
+.user-row .grow {
+  min-width: 0;
+}
+.user-row .grow b {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-row select,
+.new-user select,
+.people-add select {
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 6px;
+}
+.new-user {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.new-user input {
+  margin-top: 0 !important;
+}
+.new-user select {
+  height: 42px;
+}
+.people {
+  margin-bottom: 8px;
+}
+.people-add {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+.people-input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font: inherit;
+}
+.people-add .btn {
+  height: 36px;
+  padding: 0 12px;
+}
+.modal .mi-sep:not(:empty) {
+  margin: 18px 0 8px;
+  padding-left: 0;
+}
+@media (max-width: 520px) {
+  .new-user {
+    grid-template-columns: 1fr;
+  }
+}
+.empty-mine {
+  color: var(--muted);
+  margin: 0 0 24px;
 }

@@ -327,6 +327,9 @@ export interface ProjectMeta {
   itemCount?: number;
   synced?: boolean; // existe en el servidor
   thumb?: string; // miniatura local (dataURL)
+  access?: 'owner' | 'edit' | 'view'; // permiso de la cuenta actual (servidor con usuarios)
+  ownerName?: string;
+  shared?: boolean; // el propietario lo ha compartido con alguien
 }
 
 export interface Rect {

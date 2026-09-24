@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { promisify } from 'node:util';
 import { WebSocketServer } from 'ws';
+import { createAuth, httpError } from './auth.js';
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -27,13 +28,15 @@ const HISTORY_DIR = path.join(DATA_DIR, 'history'); // versiones anteriores de c
 const SNAPSHOT_EVERY = Number(process.env.CANVAS_SNAPSHOT_MIN || 10) * 60 * 1000;
 const MAX_AUTO_SNAPSHOTS = 150;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const SIGNUP = process.env.CANVAS_SIGNUP === '1'; // permitir que cualquiera se cree una cuenta
 
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 fs.mkdirSync(TRASH_DIR, { recursive: true });
 fs.mkdirSync(ASSETS_DIR, { recursive: true });
 fs.mkdirSync(HISTORY_DIR, { recursive: true });
 
-if (!TOKEN) console.warn('[canvas++] AVISO: CANVAS_TOKEN vacío, el servidor no pide autenticación.');
+const auth = createAuth(DATA_DIR, TOKEN);
+if (!TOKEN && !auth.hasUsers) console.warn('[canvas++] AVISO: sin CANVAS_TOKEN ni usuarios, el servidor no pide autenticación.');
 
 // ---------- utilidades ----------
 function isNewer(a, b) {
@@ -42,12 +45,37 @@ function isNewer(a, b) {
   return String(a.by || '') > String(b.by || '');
 }
 
-function checkToken(given) {
-  if (!TOKEN) return true;
-  if (typeof given !== 'string') return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(TOKEN);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+/**
+ * Permiso de alguien sobre un proyecto: 'owner' | 'edit' | 'view' | null.
+ * who = { legacy: true } (servidor sin cuentas) o { user }.
+ */
+function accessOf(p, who) {
+  if (!who) return null;
+  if (who.legacy) return 'owner';
+  const owner = p.meta.owner || auth.firstAdmin()?.id; // proyectos de antes de crear cuentas
+  if (owner === who.user.id) return 'owner';
+  const r = p.meta.members?.[who.user.id];
+  return r === 'edit' || r === 'view' ? r : null;
+}
+const canEdit = (a) => a === 'owner' || a === 'edit';
+
+/** Metadatos que ve cada persona: sin la clave del enlace si no puede gestionarlo. */
+function metaFor(p, who) {
+  const access = accessOf(p, who);
+  const { shareToken, members, ...m } = publicMeta(p);
+  const owner = auth.byId(p.meta.owner || auth.firstAdmin()?.id || '');
+  return { ...m, access, ownerName: owner?.name, shared: !!members && Object.keys(members).length > 0 };
+}
+
+function clientIp(req) {
+  // detrás de un proxy inverso de confianza se puede usar la cabecera X-Forwarded-For (CANVAS_TRUST_PROXY=1)
+  if (process.env.CANVAS_TRUST_PROXY === '1') return String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
+  return req.socket.remoteAddress || '';
+}
+
+/** Cierra las conexiones en vivo de un usuario en un proyecto (p.ej. al quitarle el acceso): al reconectar recibe el permiso nuevo. */
+function kick(p, userId) {
+  for (const c of p.clients) if (c.userId === userId) c.close(4403, 'permisos cambiados');
 }
 
 function tokenFromReq(req, url) {
@@ -95,14 +123,19 @@ function projectFile(id) {
   return path.join(PROJECTS_DIR, `${id}.json`);
 }
 
-async function loadAllMeta() {
+async function allProjects() {
   const files = (await fsp.readdir(PROJECTS_DIR)).filter((f) => f.endsWith('.json'));
-  const metas = [];
+  const out = [];
   for (const f of files) {
-    const id = f.slice(0, -5);
-    const p = await getProject(id);
-    if (p) metas.push(publicMeta(p));
+    const p = await getProject(f.slice(0, -5));
+    if (p) out.push(p);
   }
+  return out;
+}
+
+async function loadAllMeta(who) {
+  const metas = [];
+  for (const p of await allProjects()) if (accessOf(p, who)) metas.push(metaFor(p, who));
   return metas.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -132,10 +165,10 @@ async function getProject(id) {
   }
 }
 
-async function createProject(id, name) {
+async function createProject(id, name, owner) {
   const now = Date.now();
   const p = {
-    meta: { id, name: name || 'Sin título', createdAt: now, updatedAt: now },
+    meta: { id, name: name || 'Sin título', createdAt: now, updatedAt: now, ...(owner ? { owner } : {}) },
     items: new Map(),
     dirty: true,
     timer: null,
@@ -279,7 +312,34 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return send(res, 204, '');
     if (!url.pathname.startsWith('/api/')) return serveStatic(req, res, url);
 
-    if (url.pathname === '/api/health') return send(res, 200, { ok: true, auth: !!TOKEN, version: 1 });
+    if (url.pathname === '/api/health')
+      return send(res, 200, { ok: true, auth: !!TOKEN || auth.hasUsers, users: auth.hasUsers, setupToken: !auth.hasUsers && !!TOKEN, signup: SIGNUP, version: 2 });
+
+    // ----- cuentas: alta del primer administrador, inicio de sesión y registro -----
+    if (url.pathname === '/api/auth/setup' && req.method === 'POST') {
+      const body = await readBody(req, 64 * 1024);
+      const u = await auth.setup(body);
+      // los proyectos que ya había pasan a ser del administrador
+      for (const p of await allProjects()) {
+        if (!p.meta.owner) {
+          p.meta.owner = u.id;
+          p.dirty = true;
+          await saveNow(p.meta.id);
+        }
+      }
+      return send(res, 201, { token: auth.issue(u), user: auth.publicUser(u) });
+    }
+    if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+      const body = await readBody(req, 64 * 1024);
+      const u = await auth.login(body.username, body.password, clientIp(req));
+      return send(res, 200, { token: auth.issue(u), user: auth.publicUser(u) });
+    }
+    if (url.pathname === '/api/auth/register' && req.method === 'POST') {
+      if (!SIGNUP || !auth.hasUsers) return send(res, 403, { error: 'El registro está cerrado: pide una cuenta al administrador' });
+      const body = await readBody(req, 64 * 1024);
+      const u = await auth.create({ username: body.username, password: body.password, name: body.name, role: 'user' });
+      return send(res, 201, { token: auth.issue(u), user: auth.publicUser(u) });
+    }
 
     // ----- acceso de solo lectura con enlace compartido (sin token) -----
     const shareKey = url.searchParams.get('s');
@@ -297,7 +357,73 @@ const server = http.createServer(async (req, res) => {
       // solo assets que aparecen en ese proyecto
       shareOk = !!p && checkShare(p, shareKey) && JSON.stringify([...p.items.values()]).includes(aid);
     }
-    if (!shareOk && !checkToken(tokenFromReq(req, url))) return send(res, 401, { error: 'token inválido' });
+    const who = shareOk ? null : auth.identify(tokenFromReq(req, url));
+    if (!shareOk && !who) return send(res, 401, { error: auth.hasUsers ? 'sesión caducada o no válida' : 'token inválido' });
+
+    // ----- mi cuenta -----
+    if (url.pathname.startsWith('/api/auth/')) {
+      if (!who.user) return send(res, 400, { error: 'El servidor no tiene cuentas de usuario todavía' });
+      const u = who.user;
+      if (url.pathname === '/api/auth/me' && req.method === 'GET') return send(res, 200, auth.publicUser(u));
+      if (url.pathname === '/api/auth/me' && req.method === 'PATCH') {
+        const body = await readBody(req, 64 * 1024);
+        await auth.update(u, { name: body.name });
+        return send(res, 200, auth.publicUser(u));
+      }
+      if (url.pathname === '/api/auth/password' && req.method === 'POST') {
+        const body = await readBody(req, 64 * 1024);
+        if (!(await auth.verifyPassword(u, body.old))) return send(res, 403, { error: 'La contraseña actual no es correcta' });
+        await auth.setPassword(u, body.password);
+        return send(res, 200, { token: auth.issue(u) }); // las demás sesiones quedan cerradas
+      }
+      if (url.pathname === '/api/auth/logout-all' && req.method === 'POST') {
+        await auth.logoutAll(u);
+        return send(res, 200, { token: auth.issue(u) });
+      }
+      return send(res, 404, { error: 'no encontrado' });
+    }
+
+    // ----- usuarios (el administrador los gestiona; los demás solo ven el directorio para compartir) -----
+    const um = url.pathname.match(/^\/api\/users(?:\/([^/]+))?$/);
+    if (um) {
+      const me = who.user;
+      if (!me) return send(res, 400, { error: 'El servidor no tiene cuentas de usuario todavía' });
+      const isAdmin = me.role === 'admin';
+      if (!um[1] && req.method === 'GET') {
+        return send(res, 200, isAdmin ? auth.list() : auth.list().map(({ id, username, name }) => ({ id, username, name })));
+      }
+      if (!isAdmin) return send(res, 403, { error: 'Solo el administrador puede gestionar usuarios' });
+      if (!um[1] && req.method === 'POST') {
+        const body = await readBody(req, 64 * 1024);
+        return send(res, 201, auth.publicUser(await auth.create(body)));
+      }
+      const target = auth.byId(um[1]);
+      if (!target) return send(res, 404, { error: 'usuario no existe' });
+      if (req.method === 'PATCH') {
+        const body = await readBody(req, 64 * 1024);
+        await auth.update(target, body);
+        if (body.password) await auth.setPassword(target, body.password);
+        return send(res, 200, auth.publicUser(target));
+      }
+      if (req.method === 'DELETE') {
+        if (target === me) return send(res, 400, { error: 'No puedes borrar tu propia cuenta' });
+        const heir = me;
+        await auth.remove(target);
+        // sus proyectos pasan al administrador que la borra; se le quita de los compartidos
+        for (const p of await allProjects()) {
+          let changed = false;
+          if (p.meta.owner === target.id) (p.meta.owner = heir.id), (changed = true);
+          if (p.meta.members?.[target.id]) delete p.meta.members[target.id], (changed = true);
+          if (changed) {
+            kick(p, target.id);
+            p.dirty = true;
+            await saveNow(p.meta.id);
+          }
+        }
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 405, { error: 'método no permitido' });
+    }
 
     // ----- assets binarios (imágenes de documentos) -----
     const am = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
@@ -342,6 +468,8 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (req.method === 'PUT') {
+        // los archivos no se sobrescriben nunca (si ya existe, es un reintento del mismo cliente)
+        if (await fsp.stat(file).then(() => true, () => false)) return send(res, 200, { ok: true, id: aid, existed: true });
         const type = String(req.headers['content-type'] || 'application/octet-stream').slice(0, 100);
         if (!/^(image\/(png|jpeg|webp|gif)|application\/pdf|audio\/(webm|ogg|mp4|mpeg|wav|aac|x-m4a)|video\/(mp4|webm|quicktime|ogg))(;.*)?$/.test(type)) return send(res, 415, { error: 'tipo no permitido' });
         // se escribe en disco a medida que llega (vídeos grandes sin llenar la memoria)
@@ -367,11 +495,57 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----- historial y compartir -----
+    // ----- personas con acceso a un proyecto -----
+    const mm = url.pathname.match(/^\/api\/projects\/([^/]+)\/members(?:\/([^/]+))?$/);
+    if (mm) {
+      const p = await getProject(mm[1]);
+      const access = p && accessOf(p, who);
+      if (!access) return send(res, 404, { error: 'proyecto no existe' });
+      if (!who.user) return send(res, 400, { error: 'El servidor no tiene cuentas de usuario todavía' });
+      const list = () => {
+        const owner = auth.byId(p.meta.owner || auth.firstAdmin()?.id || '');
+        const out = owner ? [{ ...auth.publicUser(owner), access: 'owner' }] : [];
+        for (const [uid, r] of Object.entries(p.meta.members || {})) {
+          const u = auth.byId(uid);
+          if (u) out.push({ ...auth.publicUser(u), access: r });
+        }
+        return out.map(({ role, ...x }) => x);
+      };
+      if (!mm[2] && req.method === 'GET') return send(res, 200, list());
+      if (!mm[2] && req.method === 'POST') {
+        if (access !== 'owner') return send(res, 403, { error: 'Solo quien creó el proyecto puede compartirlo' });
+        const body = await readBody(req, 64 * 1024);
+        const u = auth.byName(body.username) || auth.byId(String(body.id || ''));
+        if (!u) return send(res, 404, { error: 'No existe ese usuario' });
+        if (u.id === (p.meta.owner || auth.firstAdmin()?.id)) return send(res, 400, { error: 'Ya es el propietario' });
+        const r = body.access === 'view' ? 'view' : 'edit';
+        p.meta.members = { ...(p.meta.members || {}), [u.id]: r };
+        p.dirty = true;
+        await saveNow(p.meta.id);
+        kick(p, u.id);
+        return send(res, 200, list());
+      }
+      if (mm[2] && req.method === 'DELETE') {
+        // el propietario quita a alguien, o alguien sale de un proyecto compartido
+        if (access !== 'owner' && mm[2] !== who.user.id) return send(res, 403, { error: 'No permitido' });
+        if (p.meta.members?.[mm[2]]) {
+          delete p.meta.members[mm[2]];
+          p.dirty = true;
+          await saveNow(p.meta.id);
+          kick(p, mm[2]);
+        }
+        return send(res, 200, list());
+      }
+      return send(res, 405, { error: 'método no permitido' });
+    }
+
     const hm = url.pathname.match(/^\/api\/projects\/([^/]+)\/(history|share)(?:\/(\d+))?(?:\/(restore))?$/);
     if (hm) {
       const [, pid, what, ts, restore] = hm;
       const p = await getProject(pid);
-      if (!p) return send(res, 404, { error: 'proyecto no existe' });
+      const access = p && accessOf(p, who);
+      if (!access) return send(res, 404, { error: 'proyecto no existe' });
+      if (!canEdit(access)) return send(res, 403, { error: 'Solo lectura: no puedes cambiar esto' });
       if (what === 'share') {
         if (req.method === 'POST') {
           p.meta.shareToken = p.meta.shareToken || crypto.randomBytes(18).toString('base64url');
@@ -426,14 +600,15 @@ const server = http.createServer(async (req, res) => {
     if (!m) return send(res, 404, { error: 'no encontrado' });
     const id = m[1];
 
-    if (!id && req.method === 'GET') return send(res, 200, await loadAllMeta());
+    if (!id && req.method === 'GET') return send(res, 200, await loadAllMeta(who));
 
     if (!id && req.method === 'POST') {
       const body = await readBody(req);
       const newId = body.id && ID_RE.test(body.id) ? body.id : crypto.randomUUID();
       let p = await getProject(newId);
       const created = !p;
-      if (!p) p = await createProject(newId, String(body.name || '').slice(0, 200));
+      if (p && !canEdit(accessOf(p, who))) return send(res, 403, { error: 'No tienes permiso sobre ese proyecto' });
+      if (!p) p = await createProject(newId, String(body.name || '').slice(0, 200), who.user?.id);
       // proyecto creado sin conexión: el cliente sube sus elementos al darlo de alta
       if (Array.isArray(body.items) && body.items.length) {
         const { accepted } = mergeOps(p, body.items);
@@ -442,25 +617,29 @@ const server = http.createServer(async (req, res) => {
           broadcast(p, { t: 'ops', ops: accepted });
         }
       }
-      return send(res, created ? 201 : 200, publicMeta(p));
+      return send(res, created ? 201 : 200, metaFor(p, who));
     }
 
     if (!id) return send(res, 405, { error: 'método no permitido' });
     const p = await getProject(id);
-    if (!p) return send(res, 404, { error: 'proyecto no existe' });
+    const access = p && accessOf(p, who);
+    if (!access) return send(res, 404, { error: 'proyecto no existe' });
 
     if (req.method === 'GET') {
-      return send(res, 200, { meta: publicMeta(p), items: [...p.items.values()] });
+      return send(res, 200, { meta: metaFor(p, who), items: [...p.items.values()] });
     }
     if (req.method === 'PATCH') {
+      if (!canEdit(access)) return send(res, 403, { error: 'Solo lectura' });
       const body = await readBody(req);
       if (typeof body.name === 'string') p.meta.name = body.name.slice(0, 200);
       p.meta.updatedAt = Date.now();
       scheduleSave(id);
-      broadcast(p, { t: 'meta', meta: publicMeta(p) });
-      return send(res, 200, publicMeta(p));
+      const { shareToken, members, ...m } = publicMeta(p);
+      broadcast(p, { t: 'meta', meta: m });
+      return send(res, 200, metaFor(p, who));
     }
     if (req.method === 'DELETE') {
+      if (access !== 'owner') return send(res, 403, { error: 'Solo quien creó el proyecto puede borrarlo' });
       await saveNow(id);
       for (const c of p.clients) c.close(4404, 'proyecto eliminado');
       projects.delete(id);
@@ -469,6 +648,7 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 405, { error: 'método no permitido' });
   } catch (e) {
+    if (e.status) return send(res, e.status, { error: e.message });
     console.error('[canvas++]', e);
     return send(res, 500, { error: String(e.message || e) });
   }
@@ -497,25 +677,35 @@ server.on('upgrade', async (req, socket, head) => {
     }
     return wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, p, id, 'viewer-' + crypto.randomBytes(3).toString('hex'), true));
   }
-  if (!checkToken(url.searchParams.get('token'))) {
+  const who = auth.identify(url.searchParams.get('token'));
+  if (!who) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     return socket.destroy();
   }
   let p = await getProject(id);
   if (!p) {
     if (!ID_RE.test(id)) return socket.destroy();
-    p = await createProject(id, name); // proyecto creado offline en otro dispositivo
+    p = await createProject(id, name, who.user?.id); // proyecto creado offline en otro dispositivo
   }
-  wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, p, id, url.searchParams.get('client') || 'anon'));
+  const access = accessOf(p, who);
+  if (!access) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    return socket.destroy();
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    ws.userId = who.user?.id;
+    ws.userName = who.user?.name;
+    onConnection(ws, p, id, url.searchParams.get('client') || 'anon', access === 'view');
+  });
 });
 
 function onConnection(ws, p, id, clientId, readOnly = false) {
   p.clients.add(ws);
   ws.isAlive = true;
   ws.on('pong', () => (ws.isAlive = true));
-  const { shareToken, ...meta } = publicMeta(p);
+  const { shareToken, members, ...meta } = publicMeta(p);
   if (readOnly) ws.send(JSON.stringify({ t: 'readonly' }));
-  ws.send(JSON.stringify({ t: 'snapshot', meta: readOnly ? meta : publicMeta(p), items: [...p.items.values()] }));
+  ws.send(JSON.stringify({ t: 'snapshot', meta, items: [...p.items.values()] }));
 
   ws.on('message', (raw) => {
     let msg;
@@ -524,7 +714,7 @@ function onConnection(ws, p, id, clientId, readOnly = false) {
     } catch {
       return;
     }
-    if (readOnly) return; // los visitantes con enlace no pueden modificar nada
+    if (readOnly && !(ws.userId && (msg.t === 'cursor' || msg.t === 'laser'))) return; // solo lectura: no puede modificar nada
     if (msg.t === 'ops' && Array.isArray(msg.ops)) {
       const { accepted, rejected } = mergeOps(p, msg.ops);
       if (accepted.length) {
@@ -535,7 +725,7 @@ function onConnection(ws, p, id, clientId, readOnly = false) {
       ws.send(JSON.stringify({ t: 'ack', seq: msg.seq }));
     } else if (msg.t === 'cursor' || msg.t === 'laser') {
       // mensajes efímeros: cursores y puntero láser de cada dispositivo
-      const out = { t: msg.t, client: clientId, name: String(msg.name || '').slice(0, 40), color: String(msg.color || '').slice(0, 20) };
+      const out = { t: msg.t, client: clientId, name: String(ws.userName || msg.name || '').slice(0, 40), color: String(msg.color || '').slice(0, 20) };
       if (msg.t === 'cursor') Object.assign(out, { x: +msg.x || 0, y: +msg.y || 0, tool: String(msg.tool || '').slice(0, 20) });
       else Object.assign(out, { pts: Array.isArray(msg.pts) ? msg.pts.slice(0, 200).map(Number) : [], end: !!msg.end });
       broadcast(p, out, ws);

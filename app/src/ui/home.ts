@@ -1,11 +1,13 @@
 // Pantalla de proyectos + ajustes de conexión al NAS.
 import type { ProjectMeta } from '../types';
-import { settings, saveSettings, hasServer } from '../settings';
+import { settings, saveSettings, hasServer, setAccount, serverBase } from '../settings';
 import { formatDate, h, toast, uid } from '../util';
 import { icons } from './icons';
 import { askConfirm, askText } from './dialogs';
 import { APP_VERSION, manualCheck } from '../updates';
-import { localProjects, remote, removeLocalProject, syncProjectList, testServer, upsertLocalProject } from '../store';
+import { accounts, health, localProjects, remote, removeLocalProject, syncProjectList, testServer, upsertLocalProject } from '../store';
+import { avatarColor, initials, openMyAccount, openUsersAdmin } from './account';
+import type { LoginView } from './login';
 
 export class HomeView {
   root: HTMLElement;
@@ -13,9 +15,16 @@ export class HomeView {
   private status: HTMLElement;
   private list: ProjectMeta[] = [];
 
-  constructor(private onOpen: (p: ProjectMeta) => void) {
-    this.grid = h('div', { class: 'grid' });
+  private userBtn: HTMLElement;
+
+  constructor(
+    private onOpen: (p: ProjectMeta) => void,
+    private onLogin: (opts?: ConstructorParameters<typeof LoginView>[1]) => void,
+  ) {
+    this.grid = h('div', { class: 'projects' });
     this.status = h('div', { class: 'conn' });
+    this.userBtn = h('div', { class: 'user-slot' });
+    this.renderUser();
     this.root = h(
       'div',
       { class: 'home' },
@@ -28,6 +37,7 @@ export class HomeView {
         h('button', { class: 'tb', title: 'Actualizar', html: icons.refresh, onclick: () => this.refresh() }),
         h('button', { class: 'tb', title: 'Ajustes', html: icons.settings, onclick: () => this.openSettings() }),
         h('button', { class: 'btn primary', onclick: () => this.create() }, h('span', { html: icons.plus }), 'Nuevo proyecto'),
+        this.userBtn,
       ),
       this.grid,
     );
@@ -51,6 +61,40 @@ export class HomeView {
     this.render();
   }
 
+  /** Botón con la inicial de la cuenta y su menú (mi cuenta, usuarios, cerrar sesión). */
+  private renderUser() {
+    const u = settings.user;
+    if (!u) return this.userBtn.replaceChildren();
+    const menu = h(
+      'div',
+      { class: 'acct-menu hidden' },
+      h('div', { class: 'acct-head' }, h('b', {}, u.name), h('span', { class: 'hint' }, `${u.username}${u.role === 'admin' ? ' · administrador' : ''}`)),
+      h('button', { class: 'mi', onclick: () => (menu.classList.add('hidden'), openMyAccount(() => this.renderUser())) }, h('span', { html: icons.user }), 'Mi cuenta'),
+      u.role === 'admin' ? h('button', { class: 'mi', onclick: () => (menu.classList.add('hidden'), openUsersAdmin()) }, h('span', { html: icons.users }), 'Usuarios') : '',
+      h(
+        'button',
+        {
+          class: 'mi',
+          onclick: async () => {
+            menu.classList.add('hidden');
+            if (!(await askConfirm('¿Cerrar sesión?', 'Tus proyectos siguen guardados en el NAS. En este dispositivo tendrás que volver a entrar.', 'Cerrar sesión'))) return;
+            setAccount('', null);
+            this.onLogin();
+          },
+        },
+        h('span', { html: icons.logout }),
+        'Cerrar sesión',
+      ),
+    );
+    const btn = h(
+      'button',
+      { class: 'avatar-btn', title: `${u.name} (${u.username})`, onclick: (e: Event) => (e.stopPropagation(), menu.classList.toggle('hidden')) },
+      h('span', { class: 'avatar', style: `background:${avatarColor(u.id)}` }, initials(u.name)),
+    );
+    document.addEventListener('pointerdown', (e) => !menu.contains(e.target as Node) && e.target !== btn && !btn.contains(e.target as Node) && menu.classList.add('hidden'));
+    this.userBtn.replaceChildren(btn, menu);
+  }
+
   private setConn(cls: string, text: string) {
     this.status.className = 'conn ' + cls;
     this.status.replaceChildren(h('span', { class: 'status ' + cls }), text);
@@ -69,9 +113,25 @@ export class HomeView {
       );
       return;
     }
+    const mine = this.list.filter((p) => !p.access || p.access === 'owner');
+    const shared = this.list.filter((p) => p.access && p.access !== 'owner');
+    const section = (title: string, list: ProjectMeta[]) =>
+      list.length ? [h('h2', { class: 'section-title' }, title), h('div', { class: 'grid' }, ...list.map((p) => this.card(p)))] : [];
     this.grid.replaceChildren(
-      ...this.list.map((p) =>
-        h(
+      ...(shared.length
+        ? mine.length
+          ? section('Mis proyectos', mine)
+          : [h('h2', { class: 'section-title' }, 'Mis proyectos'), h('p', { class: 'hint empty-mine' }, 'Aún no tienes proyectos propios. Crea uno con "Nuevo proyecto".')]
+        : [h('div', { class: 'grid' }, ...mine.map((p) => this.card(p)))]),
+      ...section('Compartidos conmigo', shared),
+    );
+  }
+
+  private card(p: ProjectMeta) {
+    const owner = !p.access || p.access === 'owner';
+    const badge =
+      p.access === 'view' ? h('span', { class: 'badge ro' }, 'Solo ver') : p.access === 'edit' ? h('span', { class: 'badge' }, 'Puede editar') : p.shared ? h('span', { class: 'badge' }, 'Compartido') : '';
+    return h(
           'div',
           { class: 'card', onclick: () => this.onOpen(p) },
           h('div', { class: 'thumb' }, p.thumb ? h('img', { src: p.thumb, alt: '' }) : h('span', { html: icons.sticky })),
@@ -79,27 +139,48 @@ export class HomeView {
             'div',
             { class: 'card-body' },
             h('div', { class: 'card-title' }, p.name),
-            h('div', { class: 'card-meta' }, formatDate(p.updatedAt), p.synced ? '' : ' · solo local'),
+            h('div', { class: 'card-meta' }, formatDate(p.updatedAt), p.synced ? '' : ' · solo local', !owner && p.ownerName ? ` · de ${p.ownerName}` : ''),
+            badge,
           ),
           h(
             'div',
             { class: 'card-actions' },
-            h('button', {
-              class: 'tb small',
-              title: 'Renombrar',
-              html: icons.edit,
-              onclick: (e: Event) => (e.stopPropagation(), this.rename(p)),
-            }),
-            h('button', {
-              class: 'tb small danger',
-              title: 'Eliminar',
-              html: icons.trash,
-              onclick: (e: Event) => (e.stopPropagation(), this.remove(p)),
-            }),
+            p.access !== 'view'
+              ? h('button', {
+                  class: 'tb small',
+                  title: 'Renombrar',
+                  html: icons.edit,
+                  onclick: (e: Event) => (e.stopPropagation(), this.rename(p)),
+                })
+              : '',
+            owner
+              ? h('button', {
+                  class: 'tb small danger',
+                  title: 'Eliminar',
+                  html: icons.trash,
+                  onclick: (e: Event) => (e.stopPropagation(), this.remove(p)),
+                })
+              : h('button', {
+                  class: 'tb small danger',
+                  title: 'Salir del proyecto',
+                  html: icons.logout,
+                  onclick: (e: Event) => (e.stopPropagation(), this.leave(p)),
+                }),
           ),
-        ),
-      ),
-    );
+        );
+  }
+
+  /** Deja de ver un proyecto que te compartieron (el propietario lo conserva). */
+  private async leave(p: ProjectMeta) {
+    if (!settings.user) return;
+    if (!(await askConfirm(`¿Salir de "${p.name}"?`, `Dejarás de verlo. ${p.ownerName ?? 'El propietario'} puede volver a compartirlo contigo.`, 'Salir'))) return;
+    try {
+      await accounts.removeMember(p.id, settings.user.id);
+    } catch (e: any) {
+      return toast(e?.message || 'No se puede salir sin conexión con el NAS');
+    }
+    await removeLocalProject(p.id);
+    this.refresh();
   }
 
   private async create() {
@@ -159,11 +240,30 @@ export class HomeView {
       value: settings.token,
     }) as HTMLInputElement;
     const result = h('div', { class: 'test-result' });
+    // botón para activar las cuentas si el servidor todavía no las tiene
+    const accountsRow = h('div', { class: 'row' });
+    if (hasServer() && !settings.user)
+      health()
+        .then((i) => {
+          if (!i.users)
+            accountsRow.replaceChildren(
+              h(
+                'button',
+                { class: 'btn', onclick: () => (dlg.remove(), this.onLogin({ mode: 'setup', info: i })) },
+                h('span', { html: icons.users }),
+                'Activar cuentas de usuario',
+              ),
+              h('span', { class: 'hint' }, 'Cada persona con su usuario y sus proyectos'),
+            );
+        })
+        .catch(() => {});
     const updResult = h('div', { class: 'test-result' });
     const penOnly = h('input', { type: 'checkbox', checked: settings.penOnly }) as HTMLInputElement;
     const apply = () => {
-      settings.serverUrl = url.value.trim();
-      settings.token = token.value.trim();
+      const newUrl = url.value.trim().replace(/\/+$/, '');
+      if (settings.user && newUrl !== serverBase()) setAccount('', null); // otra dirección: la sesión era de ese servidor
+      settings.serverUrl = newUrl;
+      if (!settings.user) settings.token = token.value.trim();
       settings.penOnly = penOnly.checked;
       settings.penAutoDetected = true;
       saveSettings();
@@ -176,7 +276,7 @@ export class HomeView {
         { class: 'modal' },
         h('h2', {}, 'Ajustes'),
         h('label', {}, 'Dirección del servidor en el NAS', url),
-        h('label', {}, 'Token', token),
+        settings.user ? h('p', { class: 'hint' }, `Sesión iniciada como ${settings.user.name} (${settings.user.username})`) : h('label', {}, 'Token (servidores sin cuentas de usuario)', token),
         h(
           'div',
           { class: 'row' },
@@ -201,6 +301,7 @@ export class HomeView {
           ),
           result,
         ),
+        accountsRow,
         h(
           'label',
           { class: 'check' },
@@ -232,9 +333,14 @@ export class HomeView {
             'button',
             {
               class: 'btn primary',
-              onclick: () => {
+              onclick: async () => {
                 apply();
                 dlg.remove();
+                // si el servidor nuevo usa cuentas, hay que iniciar sesión
+                if (hasServer() && !settings.user) {
+                  const i = await health().catch(() => null);
+                  if (i?.users) return this.onLogin({ info: i });
+                }
                 this.refresh();
               },
             },

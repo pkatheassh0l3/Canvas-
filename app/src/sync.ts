@@ -14,6 +14,7 @@ export interface SyncHost {
   onMeta?(m: ProjectMeta): void;
   onRemoved?(): void;
   onPresence?(msg: any): void;
+  onReadOnly?(): void;
 }
 
 export class SyncClient {
@@ -112,6 +113,7 @@ export class SyncClient {
       this.host.onPresence?.(msg);
     } else if (msg.t === 'readonly') {
       this.readOnly = true;
+      this.host.onReadOnly?.();
     }
   }
 

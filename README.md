@@ -58,6 +58,12 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
   - **PDF con las anotaciones** dibujadas encima del original; el texto sigue siendo seleccionable.
   - **PNG**.
   - En Android se abre el menú de compartir para guardar el archivo en Archivos, Drive, etc.
+- **Cuentas de usuario**:
+  - Cada persona entra con su usuario y contraseña y ve **sus proyectos** y los **compartidos con ella**.
+  - Compartir con otras cuentas como **"Puede editar"** o **"Solo ver"**. Quien solo ve puede navegar, presentar y exportar, pero no cambiar nada: lo impide también el servidor.
+  - El administrador da de alta, cambia el rol, pone contraseña nueva y borra usuarios. Los proyectos de un usuario borrado pasan al administrador.
+  - En *Mi cuenta*: cambiar el nombre y la contraseña, y cerrar la sesión en los demás dispositivos.
+  - Cada cuenta tiene su propia copia local de proyectos en el dispositivo.
 - Deshacer y rehacer, duplicar y traer al frente.
 - Atajos: `P` lápiz · `M` rotulador · `E` borrador · `V` seleccionar · `H` mano · `L` láser · `C` conector · `N` post-it · `T` texto · `D` documento · `F` ver todo · `Ctrl+F` buscar · `Ctrl+G` agrupar (`Ctrl+Shift+G` desagrupar) · `Ctrl+L` bloquear · `Alt+B` / `Alt+1…9` vistas · `Espacio` + arrastrar para mover · `Ctrl+Z` / `Ctrl+Y` · `Supr`.
 
@@ -104,6 +110,17 @@ En ambos casos:
 
 En la app: ⚙ **Ajustes** → dirección `http://IP-DEL-NAS:8787` → token → **Probar conexión** → **Guardar**.
 
+### Activar las cuentas de usuario
+
+1. En ⚙ **Ajustes**, pulsa **Activar cuentas de usuario**.
+2. Crea tu cuenta de administrador. Te pide el `CANVAS_TOKEN` para demostrar que el servidor es tuyo. Los proyectos que ya existían pasan a ser tuyos.
+3. Menú de tu cuenta (arriba a la derecha) → **Usuarios** → crea las cuentas de los demás.
+4. En cada dispositivo aparece la pantalla de inicio de sesión.
+
+Desde ese momento el `CANVAS_TOKEN` ya no da acceso a nada: solo sirvió para crear el administrador. Las versiones anteriores de la app no pueden conectarse al servidor, así que actualízalas.
+
+Si olvidas la contraseña de administrador y no hay otro administrador, para el contenedor y borra `/data/users.json`. Al volver a arrancar, el servidor está como antes de activar las cuentas y puedes crear otra vez el administrador; los proyectos se conservan.
+
 ## 3. Descargar o compilar las apps
 
 ### Desde GitHub (sin instalar nada)
@@ -149,16 +166,24 @@ CANVAS_DATA=./data CANVAS_TOKEN=dev node index.js
 | Variable | Por defecto | Descripción |
 |---|---|---|
 | `PORT` | `8787` | Puerto HTTP/WebSocket |
-| `CANVAS_TOKEN` | vacío | Token que piden las apps. Vacío significa sin autenticación (no recomendado). |
+| `CANVAS_TOKEN` | vacío | Token que piden las apps mientras no haya cuentas de usuario, y para crear el primer administrador. Vacío significa sin autenticación (no recomendado). |
+| `CANVAS_SIGNUP` | vacío | `1` permite que cualquiera que llegue al servidor se cree una cuenta. Si no, las crea el administrador. |
+| `CANVAS_TRUST_PROXY` | vacío | `1` detrás de un proxy inverso, para limitar los intentos de inicio de sesión por la IP real. |
 | `CANVAS_DATA` | `/data` | Carpeta de datos |
 | `CANVAS_PUBLIC` | `./public` | Cliente web que se sirve |
 | `CANVAS_SNAPSHOT_MIN` | `10` | Minutos entre copias automáticas del historial |
 
-Estructura de `/data`: `projects/` (un JSON por proyecto), `assets/` (imágenes, PDF, audio y vídeo), `history/<proyecto>/` (versiones comprimidas) y `trash/` (proyectos borrados).
+Estructura de `/data`: `users.json` (cuentas, con contraseñas cifradas con scrypt), `secret.key` (firma de las sesiones), `projects/` (un JSON por proyecto), `assets/` (imágenes, PDF, audio y vídeo), `history/<proyecto>/` (versiones comprimidas) y `trash/` (proyectos borrados).
 
 ## API
 
-- `GET /api/health`
+- `GET /api/health`: incluye `users` (si hay cuentas) y `signup`.
+- Cuentas:
+  - `POST /api/auth/setup {username, name, password, serverToken}`: primer administrador.
+  - `POST /api/auth/login {username, password}` y `POST /api/auth/register`: devuelven `{token, user}`. El token de sesión se envía como `Authorization: Bearer …`.
+  - `GET|PATCH /api/auth/me`, `POST /api/auth/password {old, password}` y `POST /api/auth/logout-all`.
+- `GET|POST /api/users` y `PATCH|DELETE /api/users/:id`: gestión de usuarios (solo administrador). Los demás solo pueden listar nombres para compartir.
+- `GET|POST /api/projects/:id/members {username, access: edit|view}` y `DELETE /api/projects/:id/members/:userId`: personas con acceso. Solo el propietario comparte; cada persona puede quitarse a sí misma.
 - `GET|POST /api/projects`: listar y crear. `POST {id, name, items?}` sube proyectos creados sin conexión.
 - `GET|PATCH|DELETE /api/projects/:id`
 - `GET|PUT /api/assets/:id`: imágenes, PDF, audio y vídeo (hasta 500 MB, con peticiones parciales `Range`).

@@ -163,6 +163,7 @@ export class BoardView {
   presenting = false;
   private animRaf = 0;
   readOnly = false;
+  member = false; // proyecto compartido con tu cuenta (en solo lectura también ven tu cursor)
   private shownCache: Item[] | null = null;
 
   /** Capas ordenadas (la principal no es un elemento: es la de los elementos sin capa). */
@@ -212,9 +213,10 @@ export class BoardView {
     public doc: BoardDoc,
     public meta: ProjectMeta,
     private onExit: () => void,
-    opts: { readOnly?: boolean; share?: string } = {},
+    opts: { readOnly?: boolean; share?: string; member?: boolean } = {},
   ) {
     this.readOnly = !!opts.readOnly;
+    this.member = !!opts.member;
     doc.readOnly = this.readOnly;
     this.base = h('canvas', { class: 'layer' });
     this.over = h('canvas', { class: 'layer over' });
@@ -255,10 +257,18 @@ export class BoardView {
         toast('Este proyecto se eliminó en otro dispositivo');
         this.exit();
       },
+      onReadOnly: () => {
+        // te han cambiado el permiso a "solo ver" mientras lo tenías abierto
+        if (this.readOnly) return;
+        toast('Ahora solo tienes permiso para ver este proyecto');
+        this.meta = { ...this.meta, access: 'view' };
+        this.exit();
+      },
     }, opts.share);
     doc.onLocalChange = (items) => this.sync.push(items);
     if (this.readOnly) {
       this.root.classList.add('readonly');
+      if (opts.member) this.root.classList.add('member'); // compartido contigo para ver: puede volver a proyectos y exportar
       this.tool = 'hand';
     }
 
@@ -468,6 +478,19 @@ export class BoardView {
     const toggle = (icon: string, label: string, on: boolean, fn: () => void) =>
       h('button', { class: 'mi', onclick: () => (this.closeMenu(), fn()) }, h('span', { html: icon }), label, h('b', { class: 'mi-state' }, on ? 'Sí' : 'No'));
     const sep = (t: string) => h('div', { class: 'mi-sep' }, t);
+    if (this.readOnly) {
+      m.replaceChildren(
+        sep('Ver'),
+        item(icons.fit, 'Ver todo', () => this.fitContent()),
+        item(icons.present, 'Presentar (marcos como diapositivas)', () => startPresentation(this)),
+        sep('Archivo'),
+        item(icons.fileExport, 'Exportar PDF (toda la pizarra)', () => exportBoardPdf(this, 'all')),
+        item(icons.fileExport, 'Exportar PDF (un marco por página)', () => exportBoardPdf(this, 'frames')),
+        item(icons.image, 'Exportar PNG', () => this.exportPng()),
+      );
+      m.classList.toggle('hidden');
+      return;
+    }
     m.replaceChildren(
       sep('Ver'),
       item(icons.fit, 'Ver todo', () => this.fitContent()),
@@ -486,7 +509,7 @@ export class BoardView {
       }),
       sep('Colaborar'),
       item(icons.comment, 'Comentarios', () => openCommentsPanel(this)),
-      item(icons.share, 'Compartir (solo lectura)', () => openShare(this)),
+      item(icons.share, 'Compartir', () => openShare(this)),
       item(icons.history, 'Historial de versiones', () => openHistory(this)),
       sep('Archivo'),
       item(icons.fileExport, 'Exportar PDF (toda la pizarra)', () => exportBoardPdf(this, 'all')),
@@ -1308,7 +1331,7 @@ export class BoardView {
     }
     const [wx, wy] = this.toWorld(e.clientX, e.clientY);
     if (e.pointerType !== 'touch') this.hover = [wx, wy];
-    if (!this.readOnly) this.presence.cursor(wx, wy);
+    if (!this.readOnly || this.member) this.presence.cursor(wx, wy);
     const g = this.g;
     if (!g) {
       if (this.tool === 'eraser') this.schedule();
