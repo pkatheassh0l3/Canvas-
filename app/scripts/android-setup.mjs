@@ -14,3 +14,13 @@ if (!xml.includes('usesCleartextTraffic')) {
   fs.writeFileSync(manifest, xml);
   console.log('✓ usesCleartextTraffic activado (conexión http:// al NAS en la red local)');
 }
+
+// versionName / versionCode desde package.json (necesario para que el APK nuevo se instale encima del anterior)
+const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const [maj, min, pat] = version.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
+const code = maj * 10000 + min * 100 + pat;
+const gradle = 'android/app/build.gradle';
+let g = fs.readFileSync(gradle, 'utf8');
+g = g.replace(/versionCode\s+\d+/, `versionCode ${code}`).replace(/versionName\s+"[^"]*"/, `versionName "${version}"`);
+fs.writeFileSync(gradle, g);
+console.log(`✓ Android versionName ${version} (versionCode ${code})`);

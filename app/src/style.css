@@ -662,3 +662,38 @@ button {
   opacity: 0;
   transform: translateY(8px);
 }
+
+/* ---------- aviso de actualización ---------- */
+.update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow), 0 0 0 1px var(--line);
+  padding: 10px 10px 10px 16px;
+  max-width: calc(100vw - 24px);
+  flex-wrap: wrap;
+  animation: ub-in 0.25s ease-out;
+}
+.ub-text {
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+  margin-right: 6px;
+}
+.ub-text span {
+  color: var(--muted);
+  font-size: 13px;
+}
+@keyframes ub-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+}

@@ -5,6 +5,7 @@ import { HomeView } from './ui/home';
 import { BoardView } from './board/boardView';
 import { BoardDoc } from './board/doc';
 import { loadItems } from './store';
+import { startUpdateChecks } from './updates';
 
 const app = document.getElementById('app')!;
 let board: BoardView | null = null;
@@ -34,3 +35,4 @@ window.addEventListener('popstate', () => board?.exit());
 
 if (location.hash) history.replaceState(null, '', location.pathname);
 autodetectServer().finally(showHome);
+startUpdateChecks();

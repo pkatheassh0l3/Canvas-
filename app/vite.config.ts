@@ -1,7 +1,31 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+import { readFileSync } from 'node:fs';
+
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const BUILD_ID = `${pkg.version}-${Date.now().toString(36)}`;
+
+/** Publica dist/version.json para que el cliente web servido desde el NAS detecte versiones nuevas. */
+function versionFile(): Plugin {
+  return {
+    name: 'canvaspp-version',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'version.json',
+        source: JSON.stringify({ version: pkg.version, build: BUILD_ID }),
+      });
+    },
+  };
+}
 
 export default defineConfig({
   base: './', // rutas relativas: necesario para Electron (file://) y Capacitor
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_ID__: JSON.stringify(BUILD_ID),
+    __UPDATE_REPO__: JSON.stringify(pkg.canvaspp?.updateRepo ?? ''),
+  },
+  plugins: [versionFile()],
   build: { target: 'es2020', outDir: 'dist' },
   server: {
     proxy: {

@@ -63,19 +63,18 @@ En la app: ⚙ **Ajustes** → dirección `http://IP-DEL-NAS:8787` → token →
 
 ### Desde GitHub (sin instalar nada)
 
-Crea una etiqueta y súbela:
+1. **Solo la primera vez: firma del APK.** Añade los 4 secretos `ANDROID_KEYSTORE_*` en *Settings → Secrets and variables → Actions*. Sin ellos el APK sale firmado en modo debug con una clave distinta en cada versión, y para actualizar habría que desinstalar la anterior.
+2. **Publicar una versión:** en GitHub, *Releases → Draft a new release → Choose a tag* → escribe `v0.1.0` (y `v0.2.0`, `v0.3.0`… en las siguientes) → *Publish release*.
+3. La acción *Apps (Windows + Android)* compila con ese número de versión y adjunta a la Release, en unos 10 minutos:
+   - `Canvas++ Setup x.y.z.exe` (instalador) y `Canvas++ x.y.z.exe` (portable) para Windows.
+   - `Canvas++.apk` para Android (activa *Instalar apps desconocidas*).
 
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+### Avisos de actualización
 
-La acción *Apps (Windows + Android)* compila y adjunta a la Release:
-
-- `Canvas++ Setup x.y.z.exe` (instalador) y `Canvas++ x.y.z.exe` (portable) para Windows.
-- `Canvas++.apk` para Android (activa *Instalar apps desconocidas*).
-
-El APK sale en modo debug salvo que añadas estos secretos del repositorio para firmarlo: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` y `ANDROID_KEY_PASSWORD`.
+- **Windows y Android** consultan la última Release de GitHub al arrancar, al volver a la app y cada 6 h. Si hay una versión mayor, aparece un aviso con el botón **Descargar**, que abre directamente el `.exe` o el `.apk`.
+- **La web servida desde el NAS** avisa con **Recargar** cuando el contenedor se ha actualizado.
+- En ⚙ Ajustes hay un botón **Buscar actualizaciones**, y se muestra la versión instalada.
+- El repositorio que se consulta está en `app/package.json` → `canvaspp.updateRepo`.
 
 ### En local
 

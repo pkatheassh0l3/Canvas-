@@ -1,14 +1,23 @@
 name: Apps (Windows + Android)
 
-# Al publicar una etiqueta vX.Y.Z se compilan el instalador de Windows y el APK de Android
-# y se adjuntan a la Release de GitHub. También se puede lanzar a mano (quedan como artefactos).
+# Al publicar una Release (o subir una etiqueta vX.Y.Z) se compilan el instalador de Windows
+# y el APK de Android con esa versión y se adjuntan a la Release.
+# Las apps consultan la última Release para avisar de que hay actualización.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión (p. ej. 0.2.0) — solo para pruebas manuales'
+        required: false
+        default: '0.0.0'
 
 permissions:
   contents: write
+
+env:
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
 
 jobs:
   windows:
@@ -20,16 +29,19 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
-      - working-directory: app
-        run: npm ci
+      - name: Instalar y fijar versión
+        working-directory: app
+        shell: bash
+        run: |
+          npm ci
+          npm version "${VERSION#v}" --no-git-tag-version --allow-same-version
       - working-directory: app
         run: npm run win:build -- --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: canvaspp-windows
-          path: |
-            app/electron/release/*.exe
-      - if: startsWith(github.ref, 'refs/tags/')
+          path: app/electron/release/*.exe
+      - if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: app/electron/release/*.exe
@@ -54,9 +66,10 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
         run: |
           npm ci
+          npm version "${VERSION#v}" --no-git-tag-version --allow-same-version
           npm run android:sync
           grep -q usesCleartextTraffic android/app/src/main/AndroidManifest.xml
-      - name: Firmar (opcional) y compilar APK
+      - name: Compilar y firmar APK
         working-directory: app/android
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -66,12 +79,16 @@ jobs:
         run: |
           chmod +x gradlew
           if [ -n "$KEYSTORE_B64" ]; then
+            # firma fija: permite instalar cada versión nueva encima de la anterior
             echo "$KEYSTORE_B64" | base64 -d > release.jks
             ./gradlew assembleRelease
-            $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)/apksigner sign \
-              --ks release.jks --ks-pass env:KEYSTORE_PASSWORD --ks-key-alias "$KEY_ALIAS" --key-pass env:KEY_PASSWORD \
+            BT=$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)
+            $BT/apksigner sign --ks release.jks --ks-pass env:KEYSTORE_PASSWORD \
+              --ks-key-alias "$KEY_ALIAS" --key-pass env:KEY_PASSWORD \
               --out ../../Canvas++.apk app/build/outputs/apk/release/app-release-unsigned.apk
+            rm release.jks
           else
+            echo "::warning::Sin secretos ANDROID_KEYSTORE_*: APK debug. Cada versión tendrá otra firma y habrá que desinstalar antes de actualizar."
             ./gradlew assembleDebug
             cp app/build/outputs/apk/debug/app-debug.apk ../../Canvas++.apk
           fi
@@ -79,7 +96,7 @@ jobs:
         with:
           name: canvaspp-android
           path: Canvas++.apk
-      - if: startsWith(github.ref, 'refs/tags/')
+      - if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: Canvas++.apk

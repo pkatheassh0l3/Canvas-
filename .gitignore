@@ -8,3 +8,5 @@ app/electron/release/
 app/android/
 release.jks
 /data/
+.claves-android/
+*.jks

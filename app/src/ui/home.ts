@@ -4,6 +4,7 @@ import { settings, saveSettings, hasServer } from '../settings';
 import { formatDate, h, toast, uid } from '../util';
 import { icons } from './icons';
 import { askConfirm, askText } from './dialogs';
+import { APP_VERSION, manualCheck } from '../updates';
 import { localProjects, remote, removeLocalProject, syncProjectList, testServer, upsertLocalProject } from '../store';
 
 export class HomeView {
@@ -158,6 +159,7 @@ export class HomeView {
       value: settings.token,
     }) as HTMLInputElement;
     const result = h('div', { class: 'test-result' });
+    const updResult = h('div', { class: 'test-result' });
     const penOnly = h('input', { type: 'checkbox', checked: settings.penOnly }) as HTMLInputElement;
     const apply = () => {
       settings.serverUrl = url.value.trim();
@@ -205,7 +207,23 @@ export class HomeView {
           penOnly,
           'Modo lápiz: con el dedo solo se mueve y hace zoom (recomendado en tablet con lápiz)',
         ),
-        h('p', { class: 'hint' }, `ID de este dispositivo: ${settings.clientId}`),
+        h(
+          'div',
+          { class: 'row' },
+          h(
+            'button',
+            {
+              class: 'btn',
+              onclick: async () => {
+                updResult.textContent = 'Buscando…';
+                updResult.textContent = await manualCheck();
+              },
+            },
+            'Buscar actualizaciones',
+          ),
+          updResult,
+        ),
+        h('p', { class: 'hint' }, `Canvas++ ${APP_VERSION} · ID de este dispositivo: ${settings.clientId}`),
         h(
           'div',
           { class: 'row end' },
