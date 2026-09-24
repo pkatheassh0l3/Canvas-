@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            app/package-lock.json
+            server/package-lock.json
+      - name: Cliente web (typecheck + build)
+        working-directory: app
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+        run: |
+          npm ci
+          npm run build
+      - name: Servidor (arranque de prueba)
+        working-directory: server
+        run: |
+          npm ci
+          CANVAS_DATA=/tmp/cpp CANVAS_PUBLIC=../app/dist node index.js &
+          sleep 2
+          curl -fsS http://localhost:8787/api/health

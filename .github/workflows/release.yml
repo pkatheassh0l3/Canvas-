@@ -1,0 +1,85 @@
+name: Apps (Windows + Android)
+
+# Al publicar una etiqueta vX.Y.Z se compilan el instalador de Windows y el APK de Android
+# y se adjuntan a la Release de GitHub. También se puede lanzar a mano (quedan como artefactos).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - working-directory: app
+        run: npm ci
+      - working-directory: app
+        run: npm run win:build -- --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canvaspp-windows
+          path: |
+            app/electron/release/*.exe
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/electron/release/*.exe
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - name: Generar proyecto Android (Capacitor)
+        working-directory: app
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+        run: |
+          npm ci
+          npm run android:sync
+          grep -q usesCleartextTraffic android/app/src/main/AndroidManifest.xml
+      - name: Firmar (opcional) y compilar APK
+        working-directory: app/android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.jks
+            ./gradlew assembleRelease
+            $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)/apksigner sign \
+              --ks release.jks --ks-pass env:KEYSTORE_PASSWORD --ks-key-alias "$KEY_ALIAS" --key-pass env:KEY_PASSWORD \
+              --out ../../Canvas++.apk app/build/outputs/apk/release/app-release-unsigned.apk
+          else
+            ./gradlew assembleDebug
+            cp app/build/outputs/apk/debug/app-debug.apk ../../Canvas++.apk
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canvaspp-android
+          path: Canvas++.apk
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Canvas++.apk

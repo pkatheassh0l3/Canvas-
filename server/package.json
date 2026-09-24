@@ -1,0 +1,16 @@
+{
+  "name": "canvaspp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Servidor de sincronización de Canvas++ para ejecutar en el NAS",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "CANVAS_DATA=./data node index.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

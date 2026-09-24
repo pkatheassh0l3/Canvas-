@@ -1,0 +1,10 @@
+node_modules/
+dist/
+server/data/
+server/public/
+app/electron/release/
+*.log
+.DS_Store
+app/android/
+release.jks
+/data/
