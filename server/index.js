@@ -8,7 +8,12 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
+import { promisify } from 'node:util';
 import { WebSocketServer } from 'ws';
+
+const gzip = promisify(zlib.gzip);
+const gunzip = promisify(zlib.gunzip);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
@@ -17,12 +22,16 @@ const TOKEN = process.env.CANVAS_TOKEN || '';
 const PUBLIC_DIR = path.resolve(process.env.CANVAS_PUBLIC || path.join(__dirname, 'public'));
 const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
 const TRASH_DIR = path.join(DATA_DIR, 'trash');
-const ASSETS_DIR = path.join(DATA_DIR, 'assets'); // imágenes de documentos (PDF/Word importados)
+const ASSETS_DIR = path.join(DATA_DIR, 'assets'); // imágenes, PDF, audio y vídeo
+const HISTORY_DIR = path.join(DATA_DIR, 'history'); // versiones anteriores de cada proyecto
+const SNAPSHOT_EVERY = Number(process.env.CANVAS_SNAPSHOT_MIN || 10) * 60 * 1000;
+const MAX_AUTO_SNAPSHOTS = 150;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 fs.mkdirSync(TRASH_DIR, { recursive: true });
 fs.mkdirSync(ASSETS_DIR, { recursive: true });
+fs.mkdirSync(HISTORY_DIR, { recursive: true });
 
 if (!TOKEN) console.warn('[canvas++] AVISO: CANVAS_TOKEN vacío, el servidor no pide autenticación.');
 
@@ -61,7 +70,8 @@ function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
-    'Access-Control-Allow-Headers': 'Authorization,Content-Type',
+    'Access-Control-Allow-Headers': 'Authorization,Content-Type,Range',
+    'Access-Control-Expose-Headers': 'Content-Range,Accept-Ranges,Content-Length',
   };
 }
 
@@ -152,6 +162,63 @@ async function saveNow(id) {
   const tmp = projectFile(id) + '.tmp';
   await fsp.writeFile(tmp, data);
   await fsp.rename(tmp, projectFile(id)); // escritura atómica
+  if (Date.now() - (await lastSnapshotAt(id)) > SNAPSHOT_EVERY) await snapshot(id, data, '').catch((e) => console.error('[canvas++] historial', e));
+}
+
+// ---------- historial de versiones ----------
+function historyDir(id) {
+  return path.join(HISTORY_DIR, id);
+}
+async function readIndex(id) {
+  try {
+    return JSON.parse(await fsp.readFile(path.join(historyDir(id), 'index.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+}
+async function lastSnapshotAt(id) {
+  const p = projects.get(id);
+  if (p?.lastSnap != null) return p.lastSnap;
+  const idx = await readIndex(id);
+  const t = idx.length ? idx[idx.length - 1].ts : 0;
+  if (p) p.lastSnap = t;
+  return t;
+}
+/** Guarda una copia comprimida del proyecto. label vacío = automática. */
+async function snapshot(id, data, label) {
+  const dir = historyDir(id);
+  await fsp.mkdir(dir, { recursive: true });
+  const ts = Date.now();
+  await fsp.writeFile(path.join(dir, `${ts}.json.gz`), await gzip(data));
+  const items = JSON.parse(data).items.filter((i) => !i.deleted).length;
+  let idx = await readIndex(id);
+  idx.push({ ts, label: String(label || '').slice(0, 100), items });
+  // se conservan todas las versiones con nombre y las últimas automáticas
+  const autos = idx.filter((v) => !v.label);
+  const drop = new Set(autos.slice(0, Math.max(0, autos.length - MAX_AUTO_SNAPSHOTS)).map((v) => v.ts));
+  for (const t of drop) await fsp.rm(path.join(dir, `${t}.json.gz`), { force: true });
+  idx = idx.filter((v) => !drop.has(v.ts));
+  await fsp.writeFile(path.join(dir, 'index.json'), JSON.stringify(idx));
+  const p = projects.get(id);
+  if (p) p.lastSnap = ts;
+  return { ts, label, items };
+}
+async function readSnapshot(id, ts) {
+  if (!/^\d{10,16}$/.test(String(ts))) return null;
+  try {
+    return JSON.parse((await gunzip(await fsp.readFile(path.join(historyDir(id), `${ts}.json.gz`)))).toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// ---------- enlaces de solo lectura ----------
+function checkShare(p, s) {
+  const t = p?.meta?.shareToken;
+  if (!t || typeof s !== 'string') return false;
+  const a = Buffer.from(s);
+  const b = Buffer.from(t);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 function mergeOps(p, ops) {
@@ -213,7 +280,24 @@ const server = http.createServer(async (req, res) => {
     if (!url.pathname.startsWith('/api/')) return serveStatic(req, res, url);
 
     if (url.pathname === '/api/health') return send(res, 200, { ok: true, auth: !!TOKEN, version: 1 });
-    if (!checkToken(tokenFromReq(req, url))) return send(res, 401, { error: 'token inválido' });
+
+    // ----- acceso de solo lectura con enlace compartido (sin token) -----
+    const shareKey = url.searchParams.get('s');
+    const vm = url.pathname.match(/^\/api\/view\/([^/]+)$/);
+    if (vm && req.method === 'GET') {
+      const p = await getProject(vm[1]);
+      if (!p || !checkShare(p, shareKey)) return send(res, 404, { error: 'enlace no válido' });
+      const { shareToken, ...meta } = publicMeta(p);
+      return send(res, 200, { meta, items: [...p.items.values()].filter((i) => !i.deleted) });
+    }
+    let shareOk = false;
+    if (shareKey && url.pathname.startsWith('/api/assets/') && (req.method === 'GET' || req.method === 'HEAD')) {
+      const p = await getProject(url.searchParams.get('p') || '');
+      const aid = url.pathname.split('/').pop();
+      // solo assets que aparecen en ese proyecto
+      shareOk = !!p && checkShare(p, shareKey) && JSON.stringify([...p.items.values()]).includes(aid);
+    }
+    if (!shareOk && !checkToken(tokenFromReq(req, url))) return send(res, 401, { error: 'token inválido' });
 
     // ----- assets binarios (imágenes de documentos) -----
     const am = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
@@ -227,14 +311,30 @@ const server = http.createServer(async (req, res) => {
             fsp.stat(file),
             fsp.readFile(file + '.type', 'utf8').catch(() => 'application/octet-stream'),
           ]);
-          res.writeHead(200, {
+          const headers = {
             'Content-Type': type,
-            'Content-Length': st.size,
+            'Accept-Ranges': 'bytes',
             'Cache-Control': 'private, max-age=31536000, immutable',
             'X-Content-Type-Options': 'nosniff',
             'Content-Security-Policy': 'sandbox', // un PDF o imagen abierto directamente no puede ejecutar nada
             ...corsHeaders(),
-          });
+          };
+          // peticiones parciales: necesarias para avanzar/retroceder en audio y vídeo
+          const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+          if (range && (range[1] || range[2])) {
+            let start = range[1] ? parseInt(range[1], 10) : st.size - parseInt(range[2], 10);
+            let end = range[1] && range[2] ? parseInt(range[2], 10) : st.size - 1;
+            start = Math.max(0, start);
+            end = Math.min(st.size - 1, end);
+            if (start > end) {
+              res.writeHead(416, { 'Content-Range': `bytes */${st.size}`, ...corsHeaders() });
+              return res.end();
+            }
+            res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
+            if (req.method === 'HEAD') return res.end();
+            return fs.createReadStream(file, { start, end }).pipe(res);
+          }
+          res.writeHead(200, { ...headers, 'Content-Length': st.size });
           if (req.method === 'HEAD') return res.end();
           return fs.createReadStream(file).pipe(res);
         } catch {
@@ -243,18 +343,81 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'PUT') {
         const type = String(req.headers['content-type'] || 'application/octet-stream').slice(0, 100);
-        if (!/^(image\/(png|jpeg|webp|gif)|application\/pdf)$/.test(type)) return send(res, 415, { error: 'tipo no permitido' });
-        const chunks = [];
+        if (!/^(image\/(png|jpeg|webp|gif)|application\/pdf|audio\/(webm|ogg|mp4|mpeg|wav|aac|x-m4a)|video\/(mp4|webm|quicktime|ogg))(;.*)?$/.test(type)) return send(res, 415, { error: 'tipo no permitido' });
+        // se escribe en disco a medida que llega (vídeos grandes sin llenar la memoria)
         let size = 0;
-        for await (const c of req) {
-          size += c.length;
-          if (size > 150 * 1024 * 1024) return send(res, 413, { error: 'archivo demasiado grande' });
-          chunks.push(c);
+        const out = fs.createWriteStream(file + '.tmp');
+        try {
+          for await (const c of req) {
+            size += c.length;
+            if (size > 500 * 1024 * 1024) throw Object.assign(new Error('grande'), { code: 413 });
+            if (!out.write(c)) await new Promise((r) => out.once('drain', r));
+          }
+          await new Promise((r, j) => out.end((e) => (e ? j(e) : r())));
+        } catch (e) {
+          out.destroy();
+          await fsp.rm(file + '.tmp', { force: true });
+          return send(res, e.code === 413 ? 413 : 500, { error: e.code === 413 ? 'archivo demasiado grande' : 'error al guardar' });
         }
-        await fsp.writeFile(file + '.tmp', Buffer.concat(chunks));
         await fsp.rename(file + '.tmp', file);
         await fsp.writeFile(file + '.type', type);
         return send(res, 201, { ok: true, id: aid, size });
+      }
+      return send(res, 405, { error: 'método no permitido' });
+    }
+
+    // ----- historial y compartir -----
+    const hm = url.pathname.match(/^\/api\/projects\/([^/]+)\/(history|share)(?:\/(\d+))?(?:\/(restore))?$/);
+    if (hm) {
+      const [, pid, what, ts, restore] = hm;
+      const p = await getProject(pid);
+      if (!p) return send(res, 404, { error: 'proyecto no existe' });
+      if (what === 'share') {
+        if (req.method === 'POST') {
+          p.meta.shareToken = p.meta.shareToken || crypto.randomBytes(18).toString('base64url');
+          p.dirty = true;
+          await saveNow(pid);
+          return send(res, 200, { token: p.meta.shareToken });
+        }
+        if (req.method === 'DELETE') {
+          delete p.meta.shareToken;
+          p.dirty = true;
+          await saveNow(pid);
+          return send(res, 200, { ok: true });
+        }
+        if (req.method === 'GET') return send(res, 200, { token: p.meta.shareToken || null });
+        return send(res, 405, { error: 'método no permitido' });
+      }
+      if (!ts && req.method === 'GET') return send(res, 200, (await readIndex(pid)).slice().reverse());
+      if (!ts && req.method === 'POST') {
+        const body = await readBody(req);
+        p.dirty = true;
+        await saveNow(pid);
+        const data = await fsp.readFile(projectFile(pid), 'utf8');
+        return send(res, 201, await snapshot(pid, data, String(body.label || 'Versión guardada')));
+      }
+      const snap = ts && (await readSnapshot(pid, ts));
+      if (!snap) return send(res, 404, { error: 'versión no encontrada' });
+      if (!restore && req.method === 'GET') return send(res, 200, { items: snap.items.filter((i) => !i.deleted) });
+      if (restore && req.method === 'POST') {
+        // antes de restaurar se guarda el estado actual por si acaso
+        p.dirty = true;
+        await saveNow(pid);
+        await snapshot(pid, await fsp.readFile(projectFile(pid), 'utf8'), 'Antes de restaurar');
+        const now = Date.now();
+        const old = new Map(snap.items.map((i) => [i.id, i]));
+        const ops = [];
+        for (const cur of p.items.values()) {
+          if (!old.has(cur.id) && !cur.deleted) ops.push({ ...cur, deleted: true, rev: Math.max(now, cur.rev + 1), by: 'restore' });
+        }
+        for (const it of old.values()) {
+          const cur = p.items.get(it.id);
+          ops.push({ ...it, rev: Math.max(now, (cur?.rev ?? 0) + 1), by: 'restore' });
+        }
+        const { accepted } = mergeOps(p, ops);
+        scheduleSave(pid);
+        broadcast(p, { t: 'ops', ops: accepted });
+        return send(res, 200, { ok: true, changed: accepted.length });
       }
       return send(res, 405, { error: 'método no permitido' });
     }
@@ -322,12 +485,22 @@ function broadcast(p, msg, except) {
 server.on('upgrade', async (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname !== '/ws') return socket.destroy();
+  const id = url.searchParams.get('project') || '';
+  const name = url.searchParams.get('name') || '';
+  const share = url.searchParams.get('share');
+  if (share) {
+    // enlace de solo lectura: recibe cambios en vivo pero no puede enviar
+    const p = await getProject(id);
+    if (!p || !checkShare(p, share)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      return socket.destroy();
+    }
+    return wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, p, id, 'viewer-' + crypto.randomBytes(3).toString('hex'), true));
+  }
   if (!checkToken(url.searchParams.get('token'))) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     return socket.destroy();
   }
-  const id = url.searchParams.get('project') || '';
-  const name = url.searchParams.get('name') || '';
   let p = await getProject(id);
   if (!p) {
     if (!ID_RE.test(id)) return socket.destroy();
@@ -336,11 +509,13 @@ server.on('upgrade', async (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, p, id, url.searchParams.get('client') || 'anon'));
 });
 
-function onConnection(ws, p, id, clientId) {
+function onConnection(ws, p, id, clientId, readOnly = false) {
   p.clients.add(ws);
   ws.isAlive = true;
   ws.on('pong', () => (ws.isAlive = true));
-  ws.send(JSON.stringify({ t: 'snapshot', meta: publicMeta(p), items: [...p.items.values()] }));
+  const { shareToken, ...meta } = publicMeta(p);
+  if (readOnly) ws.send(JSON.stringify({ t: 'readonly' }));
+  ws.send(JSON.stringify({ t: 'snapshot', meta: readOnly ? meta : publicMeta(p), items: [...p.items.values()] }));
 
   ws.on('message', (raw) => {
     let msg;
@@ -349,6 +524,7 @@ function onConnection(ws, p, id, clientId) {
     } catch {
       return;
     }
+    if (readOnly) return; // los visitantes con enlace no pueden modificar nada
     if (msg.t === 'ops' && Array.isArray(msg.ops)) {
       const { accepted, rejected } = mergeOps(p, msg.ops);
       if (accepted.length) {
@@ -357,8 +533,12 @@ function onConnection(ws, p, id, clientId) {
       }
       if (rejected.length) ws.send(JSON.stringify({ t: 'ops', ops: rejected }));
       ws.send(JSON.stringify({ t: 'ack', seq: msg.seq }));
-    } else if (msg.t === 'cursor') {
-      broadcast(p, { t: 'cursor', client: clientId, x: msg.x, y: msg.y, color: msg.color }, ws);
+    } else if (msg.t === 'cursor' || msg.t === 'laser') {
+      // mensajes efímeros: cursores y puntero láser de cada dispositivo
+      const out = { t: msg.t, client: clientId, name: String(msg.name || '').slice(0, 40), color: String(msg.color || '').slice(0, 20) };
+      if (msg.t === 'cursor') Object.assign(out, { x: +msg.x || 0, y: +msg.y || 0, tool: String(msg.tool || '').slice(0, 20) });
+      else Object.assign(out, { pts: Array.isArray(msg.pts) ? msg.pts.slice(0, 200).map(Number) : [], end: !!msg.end });
+      broadcast(p, out, ws);
     }
   });
 

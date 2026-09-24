@@ -1,8 +1,9 @@
 // Dibujo de trazos y post-its sobre un CanvasRenderingContext2D.
 import { getStroke } from 'perfect-freehand';
-import type { DocItem, Item, NoteItem, Rect, StrokeData, TextItem } from '../types';
+import type { BoxItem, DocItem, Item, NoteItem, Rect, StrokeData, TextItem } from '../types';
 import { assetImage } from '../assets';
 import { boxBounds, drawBox } from './items';
+import { connectorBounds, setBoundsFn } from './extra';
 
 const pathCache = new WeakMap<StrokeData, Path2D>();
 const boundsCache = new WeakMap<object, Rect>();
@@ -84,14 +85,57 @@ export function strokeBounds(s: StrokeData): Rect {
   return r;
 }
 
-export function itemBounds(it: Item): Rect {
+/** Caja sin girar del elemento. */
+export function baseBounds(it: Item): Rect {
   if (it.kind === 'stroke') return strokeBounds(it);
   if (it.kind === 'text') return textBounds(it);
   if (it.kind === 'note' || it.kind === 'doc') return { x: it.x, y: it.y, w: it.w, h: it.h };
+  if (it.kind === 'connector') return connectorBounds(it); // depende de otros elementos: sin caché
   const c = boundsCache.get(it);
   if (c) return c;
-  const r = boxBounds(it);
+  const r = boxBounds(it as BoxItem);
   boundsCache.set(it, r);
+  return r;
+}
+
+export function itemCenter(it: Item): [number, number] {
+  const b = baseBounds(it);
+  return [b.x + b.w / 2, b.y + b.h / 2];
+}
+
+/** Gira (x, y) un ángulo a alrededor de (cx, cy). */
+export function rotatePoint(x: number, y: number, cx: number, cy: number, a: number): [number, number] {
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return [cx + (x - cx) * c - (y - cy) * s, cy + (x - cx) * s + (y - cy) * c];
+}
+
+/** Punto del mundo pasado al sistema sin girar del elemento. */
+export function toItemSpace(it: Item, x: number, y: number): [number, number] {
+  if (!it.rot) return [x, y];
+  const [cx, cy] = itemCenter(it);
+  return rotatePoint(x, y, cx, cy, -it.rot);
+}
+
+const rotCache = new WeakMap<object, Rect>();
+/** Caja envolvente en el mundo (tiene en cuenta el giro). */
+export function itemBounds(it: Item): Rect {
+  const b = baseBounds(it);
+  if (!it.rot) return b;
+  const c = rotCache.get(it);
+  if (c && it.kind !== 'connector') return c;
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  const pts = [
+    rotatePoint(b.x, b.y, cx, cy, it.rot),
+    rotatePoint(b.x + b.w, b.y, cx, cy, it.rot),
+    rotatePoint(b.x, b.y + b.h, cx, cy, it.rot),
+    rotatePoint(b.x + b.w, b.y + b.h, cx, cy, it.rot),
+  ];
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const r = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  rotCache.set(it, r);
   return r;
 }
 
@@ -283,6 +327,18 @@ export function drawNote(ctx: CanvasRenderingContext2D, n: NoteItem, zoom = 1, o
 }
 
 export function drawItem(ctx: CanvasRenderingContext2D, it: Item, zoom: number) {
+  if (it.rot) {
+    const [cx, cy] = itemCenter(it);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(it.rot);
+    ctx.translate(-cx, -cy);
+    drawItemRaw(ctx, it, zoom);
+    ctx.restore();
+  } else drawItemRaw(ctx, it, zoom);
+}
+
+function drawItemRaw(ctx: CanvasRenderingContext2D, it: Item, zoom: number) {
   if (it.kind === 'stroke') drawStroke(ctx, it);
   else if (it.kind === 'note') drawNote(ctx, it, zoom);
   else if (it.kind === 'text') drawText(ctx, it);
@@ -299,6 +355,7 @@ export function paintOrder(items: Item[]): Item[] {
 /** Renderiza un conjunto de elementos a un canvas (miniaturas / exportar PNG). */
 export function renderToCanvas(items: Item[], maxSize: number, bg = '#faf9f6', pad = 40): HTMLCanvasElement | null {
   let r: Rect | null = null;
+  items = items.filter((i) => i.kind !== 'layer' && i.kind !== 'bookmark' && i.kind !== 'comment');
   for (const it of items) {
     const b = itemBounds(it);
     r = r ? unionR(r, b) : { ...b };
@@ -323,3 +380,5 @@ function unionR(a: Rect, b: Rect): Rect {
   const y = Math.min(a.y, b.y);
   return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
 }
+
+setBoundsFn(itemBounds);

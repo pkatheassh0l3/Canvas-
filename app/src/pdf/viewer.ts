@@ -31,7 +31,7 @@ interface PageView {
   rendering: boolean;
 }
 
-export function openPdfViewer(item: PdfItem, onSave: (ann: Ann) => void): Promise<PdfViewerResult> {
+export function openPdfViewer(item: PdfItem, opts: { page?: number; readOnly?: boolean }, onSave: (ann: Ann) => void): Promise<PdfViewerResult> {
   return new Promise((resolve) => {
     let ann: Ann = JSON.parse(JSON.stringify(item.ann || {}));
     const undo: string[] = [];
@@ -424,7 +424,7 @@ export function openPdfViewer(item: PdfItem, onSave: (ann: Ann) => void): Promis
       const btn = (label: string, fn: () => void, extra: Record<string, any> = {}) =>
         h('button', { class: 'sb', onmousedown: (e: Event) => e.preventDefault(), onclick: fn, ...extra }, label);
       selBar.replaceChildren(
-        ...MARK_COLORS.slice(0, 4).map((c) =>
+        ...(opts.readOnly ? [] : MARK_COLORS.slice(0, 4)).map((c) =>
           h('button', {
             class: 'sw',
             style: `--c:${c}`,
@@ -434,8 +434,7 @@ export function openPdfViewer(item: PdfItem, onSave: (ann: Ann) => void): Promis
           }),
         ),
         h('div', { class: 'sep' }),
-        btn('Subrayar', () => addMark('underline', '#e5484d')),
-        btn('Tachar', () => addMark('strike', '#e5484d')),
+        ...(opts.readOnly ? [] : [btn('Subrayar', () => addMark('underline', '#e5484d')), btn('Tachar', () => addMark('strike', '#e5484d'))]),
         btn('Copiar', async () => {
           const t = window.getSelection()?.toString() ?? '';
           try {
@@ -550,6 +549,7 @@ export function openPdfViewer(item: PdfItem, onSave: (ann: Ann) => void): Promis
     // ---------------- arranque ----------------
     document.body.append(root);
     window.addEventListener('keydown', onKey, true);
+    if (opts.readOnly) root.classList.add('pv-readonly');
     setTool('text');
     refreshButtons();
     buildPages();
@@ -564,6 +564,7 @@ export function openPdfViewer(item: PdfItem, onSave: (ann: Ann) => void): Promis
         pdf = await task.promise;
         loading.remove();
         pages.forEach((p) => io.observe(p.el));
+        if (opts.page && pages[opts.page]) scroller.scrollTop = pages[opts.page].el.offsetTop - 12;
         queueVisible();
       } catch (e: any) {
         loading.textContent = e?.message || 'No se pudo abrir el PDF';

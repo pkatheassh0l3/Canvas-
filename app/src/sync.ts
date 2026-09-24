@@ -13,6 +13,7 @@ export interface SyncHost {
   onStatus(s: SyncStatus): void;
   onMeta?(m: ProjectMeta): void;
   onRemoved?(): void;
+  onPresence?(msg: any): void;
 }
 
 export class SyncClient {
@@ -24,11 +25,13 @@ export class SyncClient {
   private flushTimer: any = null;
   private seq = 0;
   status: SyncStatus = 'local';
+  readOnly = false;
 
   constructor(
     private projectId: string,
     private projectName: string,
     private host: SyncHost,
+    private share?: string,
   ) {
     if (hasServer()) this.connect();
     else this.setStatus('local');
@@ -53,7 +56,7 @@ export class SyncClient {
     this.setStatus('connecting');
     let ws: WebSocket;
     try {
-      ws = new WebSocket(wsUrl(this.projectId, this.projectName));
+      ws = new WebSocket(wsUrl(this.projectId, this.projectName, this.share));
     } catch {
       return this.scheduleReconnect();
     }
@@ -105,7 +108,16 @@ export class SyncClient {
       this.host.applyRemote(msg.ops);
     } else if (msg.t === 'meta') {
       this.host.onMeta?.(msg.meta);
+    } else if (msg.t === 'cursor' || msg.t === 'laser' || msg.t === 'leave') {
+      this.host.onPresence?.(msg);
+    } else if (msg.t === 'readonly') {
+      this.readOnly = true;
     }
+  }
+
+  /** Mensajes efímeros (cursores, puntero láser): no se guardan. */
+  sendRaw(msg: object) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.status === 'online') this.ws.send(JSON.stringify(msg));
   }
 
   /** Encola un cambio local; se envían agrupados cada ~50 ms. */

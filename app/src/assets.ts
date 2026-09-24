@@ -39,7 +39,7 @@ let uploading = false;
 let again = false;
 /** Sube al NAS las imágenes/PDF creados sin conexión (se reintenta en cada llamada y al reconectar). */
 export async function uploadPending(): Promise<void> {
-  if (!hasServer()) return;
+  if (!hasServer() || shareAuth.s) return;
   if (uploading) {
     again = true; // se añadió algo mientras se subía: otra vuelta al terminar
     return;
@@ -75,7 +75,8 @@ async function fetchBlob(id: string): Promise<Blob | null> {
   if (local) return local;
   if (!hasServer()) return null;
   try {
-    const r = await fetch(`${serverBase()}/api/assets/${id}`, { headers: { Authorization: `Bearer ${settings.token}` } });
+    const q = shareAuth.s ? `?s=${encodeURIComponent(shareAuth.s)}&p=${encodeURIComponent(shareAuth.project ?? '')}` : '';
+    const r = await fetch(`${serverBase()}/api/assets/${id}${q}`, { headers: shareAuth.s ? {} : { Authorization: `Bearer ${settings.token}` } });
     if (!r.ok) return null;
     const blob = await r.blob();
     await set(id, blob, store);
@@ -169,4 +170,30 @@ export async function downscaleImage(file: Blob, max: number): Promise<Blob> {
   URL.revokeObjectURL(u);
   const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
   return new Promise((r) => c.toBlob((b) => r(b ?? file), type, 0.88));
+}
+
+/** Datos del enlace de solo lectura (visitantes sin token). */
+export const shareAuth: { project?: string; s?: string } = {};
+
+/** URL para reproducir un audio/vídeo desde el NAS sin descargarlo entero (admite saltos). */
+export async function assetStreamUrl(id: string): Promise<string | null> {
+  const local = await get<Blob>(id, store);
+  if (local) return assetUrl(id);
+  if (!hasServer()) return null;
+  const q = shareAuth.s ? `s=${encodeURIComponent(shareAuth.s)}&p=${encodeURIComponent(shareAuth.project ?? '')}` : `token=${encodeURIComponent(settings.token)}`;
+  return `${serverBase()}/api/assets/${id}?${q}`;
+}
+
+/** Espera a que una imagen esté cargada (para exportar sin huecos). */
+export async function ensureImage(id: string): Promise<void> {
+  const u = await assetUrl(id);
+  if (!u) return;
+  let img = images.get(id);
+  if (!img) {
+    img = new Image();
+    images.set(id, img);
+  }
+  if (!img.src) img.src = u;
+  if (img.complete && img.naturalWidth) return;
+  await img.decode().catch(() => {});
 }

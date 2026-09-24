@@ -11,9 +11,13 @@ const manifest = 'android/app/src/main/AndroidManifest.xml';
 let xml = fs.readFileSync(manifest, 'utf8');
 if (!xml.includes('usesCleartextTraffic')) {
   xml = xml.replace('<application', '<application android:usesCleartextTraffic="true"');
-  fs.writeFileSync(manifest, xml);
   console.log('✓ usesCleartextTraffic activado (conexión http:// al NAS en la red local)');
 }
+// micrófono para las notas de voz
+for (const perm of ['android.permission.RECORD_AUDIO', 'android.permission.MODIFY_AUDIO_SETTINGS']) {
+  if (!xml.includes(perm)) xml = xml.replace('</manifest>', `    <uses-permission android:name="${perm}" />\n</manifest>`);
+}
+fs.writeFileSync(manifest, xml);
 
 // versionName / versionCode desde package.json (necesario para que el APK nuevo se instale encima del anterior)
 const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));

@@ -7,6 +7,11 @@ export interface Settings {
   penOnly: boolean; // con lápiz: el dedo solo mueve/zoom
   wheel: 'zoom' | 'pan';
   penAutoDetected: boolean;
+  customColors: string[];
+  snap: boolean;
+  autoShape: boolean;
+  minimap: boolean;
+  userName: string;
 }
 
 const KEY = 'canvaspp.settings';
@@ -23,6 +28,11 @@ function load(): Settings {
     penOnly: s.penOnly ?? false,
     wheel: s.wheel ?? 'zoom',
     penAutoDetected: s.penAutoDetected ?? false,
+    customColors: s.customColors ?? [],
+    snap: s.snap ?? false,
+    autoShape: s.autoShape ?? false,
+    minimap: s.minimap ?? true,
+    userName: s.userName ?? '',
   };
 }
 
@@ -43,9 +53,11 @@ export function hasServer() {
   return !!serverBase();
 }
 
-export function wsUrl(projectId: string, name: string) {
+export function wsUrl(projectId: string, name: string, share?: string) {
   const base = serverBase().replace(/^http/, 'ws');
-  const q = new URLSearchParams({ project: projectId, token: settings.token, client: settings.clientId, name });
+  const q = share
+    ? new URLSearchParams({ project: projectId, share })
+    : new URLSearchParams({ project: projectId, token: settings.token, client: settings.clientId, name });
   return `${base}/ws?${q}`;
 }
 

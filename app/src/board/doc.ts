@@ -17,7 +17,11 @@ export class BoardDoc {
   onLocalChange: (items: Item[]) => void = () => {};
   maxZ = 0;
 
+  /** Solo lectura (enlace compartido): no se guarda ni se modifica nada. */
+  readOnly = false;
+
   private persist = debounce(() => {
+    if (this.readOnly) return;
     saveItems(this.projectId, [...this.items.values()]).catch((e) => console.error(e));
   }, 400);
 
@@ -62,6 +66,7 @@ export class BoardDoc {
 
   /** Aplica cambios locales. Cada elemento recibe nueva rev y autor. */
   commit(next: Item[], record = true): Item[] {
+    if (this.readOnly) return [];
     const changes: Change[] = [];
     const out: Item[] = [];
     for (const n of next) {
@@ -83,8 +88,12 @@ export class BoardDoc {
     return out;
   }
 
+  /** Capa a la que van los elementos nuevos. */
+  defaultLayer: () => string | undefined = () => undefined;
+
   add(items: Item[]) {
-    return this.commit(items);
+    const layer = this.defaultLayer();
+    return this.commit(items.map((it) => (layer && !it.layer && it.kind !== 'layer' && it.kind !== 'bookmark' ? { ...it, layer } : it)));
   }
 
   remove(ids: string[]) {

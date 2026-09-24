@@ -7,6 +7,10 @@ export interface BaseItem {
   by: string; // id del dispositivo que hizo el último cambio
   z: number; // orden de apilado
   deleted?: boolean; // lápida: se conserva para propagar borrados
+  rot?: number; // giro en radianes alrededor del centro
+  locked?: boolean; // bloqueado: no se mueve, redimensiona ni borra
+  group?: string; // id de grupo: se seleccionan juntos
+  layer?: string; // id de la capa (sin capa = capa principal)
 }
 
 /** Trazo en coordenadas locales: [x, y, presión, x, y, presión, ...] */
@@ -87,7 +91,7 @@ export interface TableItem extends BaseItem {
   fs: number; // tamaño de letra en unidades del mundo
 }
 
-export type ShapeKind = 'rect' | 'ellipse' | 'diamond' | 'line' | 'arrow';
+export type ShapeKind = 'rect' | 'ellipse' | 'diamond' | 'triangle' | 'line' | 'arrow';
 
 /** Forma geométrica o flecha. Las líneas van de (x, y) a (x + w, y + h); w/h pueden ser negativos. */
 export interface ShapeItem extends BaseItem {
@@ -153,12 +157,167 @@ export interface PdfItem extends BaseItem {
   thumb: string; // asset con la imagen de la primera página
   pages: number;
   sizes: [number, number][]; // tamaño de cada página en puntos PDF
+  text?: string[]; // texto de cada página (para la búsqueda)
   ann: Record<string, PdfAnnotation[]>; // por índice de página ("0", "1"…)
 }
 
-export type Item = StrokeItem | NoteItem | TextItem | DocItem | ImageItem | TableItem | ShapeItem | FrameItem | LinkItem | TodoItem | PdfItem;
+/** Extremo de un conector: pegado a un elemento (id) o suelto en un punto. */
+export interface ConnectorEnd {
+  id?: string;
+  x: number;
+  y: number;
+}
+
+/** Línea/flecha que une dos elementos y los sigue al moverlos. */
+export interface ConnectorItem extends BaseItem {
+  kind: 'connector';
+  from: ConnectorEnd;
+  to: ConnectorEnd;
+  stroke: string;
+  sw: number;
+  arrow: 'end' | 'both' | 'none';
+  curve: boolean;
+  label: string;
+}
+
+/** Capa (no se dibuja): agrupa elementos para ocultarlos o bloquearlos juntos. */
+export interface LayerItem extends BaseItem {
+  kind: 'layer';
+  name: string;
+  order: number;
+  hidden: boolean;
+  lockedLayer: boolean;
+}
+
+/** Vista guardada (marcador de zona). */
+export interface BookmarkItem extends BaseItem {
+  kind: 'bookmark';
+  name: string;
+  x: number;
+  y: number;
+  zoom: number;
+  order: number;
+}
+
+export interface CommentMsg {
+  id: string;
+  author: string;
+  text: string;
+  at: number;
+}
+
+/** Hilo de comentarios anclado a un punto de la pizarra. */
+export interface CommentItem extends BaseItem {
+  kind: 'comment';
+  x: number;
+  y: number;
+  msgs: CommentMsg[];
+  resolved: boolean;
+}
+
+/** Nota de voz. */
+export interface AudioItem extends BaseItem {
+  kind: 'audio';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  asset: string;
+  duration: number; // segundos
+  title: string;
+}
+
+/** Vídeo de YouTube o archivo de vídeo. */
+export interface VideoItem extends BaseItem {
+  kind: 'video';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  source: 'youtube' | 'file';
+  ytId?: string;
+  asset?: string;
+  thumb?: string; // asset con fotograma
+  title: string;
+}
+
+/** Fórmula matemática (LaTeX) renderizada como SVG. */
+export interface MathItem extends BaseItem {
+  kind: 'math';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  tex: string;
+  color: string;
+  svg: string;
+  ratio: number; // alto/ancho natural del SVG
+  svgW?: number; // ancho natural del SVG (px)
+}
+
+/** Bloque de código con resaltado. */
+export interface CodeItem extends BaseItem {
+  kind: 'code';
+  x: number;
+  y: number;
+  w: number;
+  h: number; // calculado
+  code: string;
+  lang: string;
+}
+
+export type ChartKind = 'bar' | 'line' | 'pie';
+
+/** Gráfico a partir de una tabla (se actualiza si cambia la tabla). */
+export interface ChartItem extends BaseItem {
+  kind: 'chart';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  chart: ChartKind;
+  table?: string;
+  data: string[][]; // copia de la tabla por si se borra
+  title: string;
+}
+
+export type Item =
+  | StrokeItem
+  | NoteItem
+  | TextItem
+  | DocItem
+  | ImageItem
+  | TableItem
+  | ShapeItem
+  | FrameItem
+  | LinkItem
+  | TodoItem
+  | PdfItem
+  | ConnectorItem
+  | LayerItem
+  | BookmarkItem
+  | CommentItem
+  | AudioItem
+  | VideoItem
+  | MathItem
+  | CodeItem
+  | ChartItem;
 /** Elementos con caja (x, y, w, h) que se pueden redimensionar con el tirador. */
-export type BoxItem = NoteItem | DocItem | ImageItem | TableItem | ShapeItem | FrameItem | LinkItem | TodoItem | PdfItem;
+export type BoxItem =
+  | NoteItem
+  | DocItem
+  | ImageItem
+  | TableItem
+  | ShapeItem
+  | FrameItem
+  | LinkItem
+  | TodoItem
+  | PdfItem
+  | AudioItem
+  | VideoItem
+  | MathItem
+  | CodeItem
+  | ChartItem;
 
 export interface ProjectMeta {
   id: string;
@@ -177,7 +336,7 @@ export interface Rect {
   h: number;
 }
 
-export type Tool = 'pen' | 'marker' | 'eraser' | 'select' | 'hand' | 'note' | 'text' | 'doc' | 'shape';
+export type Tool = 'pen' | 'marker' | 'eraser' | 'select' | 'hand' | 'note' | 'text' | 'doc' | 'shape' | 'connector' | 'laser' | 'comment';
 
 export function isNewer(a: BaseItem, b?: BaseItem): boolean {
   if (!b) return true;

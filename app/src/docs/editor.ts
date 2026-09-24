@@ -32,7 +32,7 @@ type SaveFn = (doc: DocItem) => void;
 const TEXT_COLORS = ['#1f2328', '#e5484d', '#f76b15', '#30a46c', '#0090ff', '#8e4ec6', '#6b6f76'];
 const HIGHLIGHTS = ['transparent', '#fff1a8', '#d3f5d3', '#cfe8ff', '#ffd6e0', '#e6dcff'];
 
-export function openDocEditor(doc: DocItem, onSave: SaveFn): Promise<DocEditorResult> {
+export function openDocEditor(doc: DocItem, onSave: SaveFn, opts: { readOnly?: boolean } = {}): Promise<DocEditorResult> {
   return new Promise((resolve) => {
     let current: DocItem = { ...doc };
     let dirty = false;
@@ -67,7 +67,7 @@ export function openDocEditor(doc: DocItem, onSave: SaveFn): Promise<DocEditorRe
       };
     };
     const save = () => {
-      if (!dirty) return;
+      if (!dirty || opts.readOnly) return;
       dirty = false;
       current = snapshot();
       onSave(current);
@@ -329,8 +329,21 @@ export function openDocEditor(doc: DocItem, onSave: SaveFn): Promise<DocEditorRe
         title,
         status,
         h('div', { class: 'grow' }),
-        h('button', { class: 'btn ghost', onclick: importInto }, h('span', { html: icons.upload }), 'Importar Word'),
         h('button', {
+          class: 'tb',
+          title: 'Exportar a PDF',
+          html: icons.fileExport,
+          onclick: async () => {
+            dirty = true;
+            if (!opts.readOnly) save();
+            const { exportDocPdf } = await import('../features/exporter');
+            exportDocPdf(opts.readOnly ? doc : current);
+          },
+        }),
+        opts.readOnly ? '' : h('button', { class: 'btn ghost', onclick: importInto }, h('span', { html: icons.upload }), 'Importar Word'),
+        opts.readOnly
+          ? h('span', { class: 'ro-badge' }, 'Solo lectura')
+          : h('button', {
           class: 'tb danger',
           title: 'Eliminar documento',
           html: icons.trash,
@@ -349,6 +362,11 @@ export function openDocEditor(doc: DocItem, onSave: SaveFn): Promise<DocEditorRe
       busy,
     );
 
+    if (opts.readOnly) {
+      paper.setAttribute('contenteditable', 'false');
+      title.readOnly = true;
+      toolbar.remove();
+    }
     document.body.append(root);
     window.addEventListener('resize', fitWidth);
     window.addEventListener('keydown', onKey, true);

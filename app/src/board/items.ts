@@ -15,21 +15,22 @@ import type {
 } from '../types';
 import { assetImage } from '../assets';
 import { drawStroke, getRedrawHook, sheet, wrapText } from './render';
+import { drawExtra, extraBounds } from './extra';
 
 const FONT = (w: number, px: number) => `${w} ${px}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
 const layoutCache = new WeakMap<object, { rows: number[]; h: number; lines: string[][][] }>();
 let mctx: CanvasRenderingContext2D | null = null;
 const measure = () => (mctx ??= document.createElement('canvas').getContext('2d')!);
 
-export const BOX_KINDS = new Set(['note', 'doc', 'image', 'table', 'shape', 'frame', 'link', 'todo', 'pdf']);
+export const BOX_KINDS = new Set(['note', 'doc', 'image', 'table', 'shape', 'frame', 'link', 'todo', 'pdf', 'audio', 'video', 'math', 'code', 'chart']);
 export function isBox(it: Item): it is BoxItem {
   return BOX_KINDS.has(it.kind);
 }
 
 /** Cómo se redimensiona cada tipo con el tirador. */
 export function resizeMode(it: BoxItem): 'free' | 'aspect' | 'width' | 'endpoint' {
-  if (it.kind === 'doc' || it.kind === 'image' || it.kind === 'pdf') return 'aspect';
-  if (it.kind === 'table' || it.kind === 'todo') return 'width';
+  if (['doc', 'image', 'pdf', 'audio', 'video', 'math'].includes(it.kind)) return 'aspect';
+  if (it.kind === 'table' || it.kind === 'todo' || it.kind === 'code') return 'width';
   if (it.kind === 'shape' && (it.shape === 'line' || it.shape === 'arrow')) return 'endpoint';
   return 'free';
 }
@@ -274,7 +275,12 @@ export function drawShape(ctx: CanvasRenderingContext2D, s: ShapeItem, zoom: num
     ctx.beginPath();
     if (s.shape === 'rect') ctx.roundRect(r.x, r.y, r.w, r.h, Math.min(r.w, r.h) * 0.06);
     else if (s.shape === 'ellipse') ctx.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
-    else {
+    else if (s.shape === 'triangle') {
+      ctx.moveTo(r.x + r.w / 2, r.y);
+      ctx.lineTo(r.x + r.w, r.y + r.h);
+      ctx.lineTo(r.x, r.y + r.h);
+      ctx.closePath();
+    } else {
       ctx.moveTo(r.x + r.w / 2, r.y);
       ctx.lineTo(r.x + r.w, r.y + r.h / 2);
       ctx.lineTo(r.x + r.w / 2, r.y + r.h);
@@ -290,7 +296,7 @@ export function drawShape(ctx: CanvasRenderingContext2D, s: ShapeItem, zoom: num
     ctx.fillStyle = s.stroke;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const inner = s.shape === 'diamond' ? r.w * 0.55 : r.w * 0.85;
+    const inner = s.shape === 'diamond' || s.shape === 'triangle' ? r.w * 0.55 : r.w * 0.85;
     const lines = wrapText(ctx, s.label, Math.max(20, inner));
     const lh = fs * 1.25;
     const cx = r.x + r.w / 2;
@@ -415,6 +421,8 @@ function drawPdf(ctx: CanvasRenderingContext2D, p: PdfItem, zoom: number) {
 
 // ------------------------------------------------------------------ despacho
 export function boxBounds(it: BoxItem): Rect {
+  const ex = extraBounds(it);
+  if (ex) return ex;
   if (it.kind === 'shape') {
     const r = shapeRect(it);
     const p = it.sw / 2 + (it.shape === 'arrow' ? it.sw * 3 : 0);
@@ -426,6 +434,7 @@ export function boxBounds(it: BoxItem): Rect {
 }
 
 export function drawBox(ctx: CanvasRenderingContext2D, it: Item, zoom: number): boolean {
+  if (drawExtra(ctx, it, zoom)) return true;
   switch (it.kind) {
     case 'image':
       drawImage(ctx, it, zoom);

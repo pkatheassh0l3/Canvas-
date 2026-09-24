@@ -80,7 +80,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
     if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
     else if (k === 'class') el.className = v;
     else if (k === 'html') el.innerHTML = v;
-    else if (k in el && typeof v !== 'string') (el as any)[k] = v;
+    else if (k === 'value' || (k in el && typeof v !== 'string')) (el as any)[k] = v;
     else el.setAttribute(k, v === true ? '' : String(v));
   }
   for (const c of children) if (c != null && c !== false) el.append(c);
