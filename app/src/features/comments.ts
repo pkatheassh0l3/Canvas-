@@ -1,4 +1,5 @@
 // Comentarios: hilos anclados a un punto de la pizarra, con autor, respuestas y "resuelto".
+import { personAvatar } from '../ui/avatar';
 import type { BoardView } from '../board/boardView';
 import type { CommentItem } from '../types';
 import { settings, saveSettings } from '../settings';
@@ -76,9 +77,9 @@ export function openComment(b: BoardView, id: string, isNew = false) {
         h(
           'div',
           { class: 'cm-msg' },
-          h('div', { class: 'cm-meta' }, h('b', {}, m.author), ' · ', formatDate(m.at)),
+          h('div', { class: 'cm-meta' }, m.authorId ? personAvatar(m.authorId, m.author, 20) : '', h('b', {}, m.author), ' · ', formatDate(m.at)),
           h('div', { class: 'cm-text' }, m.text),
-          m.author === settings.userName &&
+          (m.authorId ? m.authorId === settings.user?.id : m.author === settings.userName) &&
             h('button', {
               class: 'cm-del',
               title: 'Borrar mensaje',
@@ -100,7 +101,7 @@ export function openComment(b: BoardView, id: string, isNew = false) {
     if (!text || !c) return;
     const author = await ensureName();
     if (!author) return;
-    b.doc.commit([{ ...c, resolved: false, msgs: [...c.msgs, { id: uid(8), author, text, at: Date.now() }] }]);
+    b.doc.commit([{ ...c, resolved: false, msgs: [...c.msgs, { id: uid(8), author, authorId: settings.user?.id, text, at: Date.now() }] }]);
     input.value = '';
   };
   input.addEventListener('keydown', (e) => {

@@ -5,6 +5,7 @@ export interface Account {
   username: string;
   name: string;
   role: 'admin' | 'user';
+  avatar?: number; // versión de la foto de perfil
 }
 
 export interface Settings {

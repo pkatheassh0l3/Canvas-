@@ -5,8 +5,9 @@ import { h, toast } from '../util';
 import { icons } from '../ui/icons';
 import { askConfirm } from '../ui/dialogs';
 import { accounts, type Member } from '../store';
-import { avatarColor, initials } from '../ui/account';
+import { avatarEl } from '../ui/avatar';
 import { openPanel } from './panel';
+import { openActivity } from './activity';
 
 async function api(method: string, id: string) {
   const r = await fetch(`${serverBase()}/api/projects/${id}/share`, { method, headers: { Authorization: `Bearer ${settings.token}` } });
@@ -54,7 +55,7 @@ export function openShare(b: BoardView) {
         return h(
           'div',
           { class: 'user-row' },
-          h('span', { class: 'avatar', style: `background:${avatarColor(m.id)}` }, initials(m.name)),
+          avatarEl(m, 32),
           h('div', { class: 'grow' }, h('b', {}, m.name, me ? ' (tú)' : ''), h('div', { class: 'hint' }, m.username)),
           sel,
           isOwner() && m.access !== 'owner'
@@ -116,7 +117,8 @@ export function openShare(b: BoardView) {
     'Compartir',
     (ctl) => {
       const { body } = ctl;
-      const head: Node[] = people ? [h('div', { class: 'mi-sep' }, 'Personas'), people, h('div', { class: 'mi-sep' }, 'Enlace de solo lectura')] : [];
+      const activityLink = h('button', { class: 'btn ghost small share-activity', onclick: () => openActivity(b) }, h('span', { html: icons.history }), 'Ver quién ha hecho qué');
+      const head: Node[] = people ? [h('div', { class: 'mi-sep' }, 'Personas'), people, activityLink, h('div', { class: 'mi-sep' }, 'Enlace de solo lectura')] : [activityLink];
       if (token === undefined) {
         body.replaceChildren(...head, h('p', { class: 'panel-hint' }, 'Cargando…'));
         api('GET', b.meta.id)

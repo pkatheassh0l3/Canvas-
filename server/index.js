@@ -12,6 +12,7 @@ import zlib from 'node:zlib';
 import { promisify } from 'node:util';
 import { WebSocketServer } from 'ws';
 import { createAuth, httpError } from './auth.js';
+import { createActivity } from './activity.js';
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -27,6 +28,7 @@ const ASSETS_DIR = path.join(DATA_DIR, 'assets'); // imágenes, PDF, audio y ví
 const HISTORY_DIR = path.join(DATA_DIR, 'history'); // versiones anteriores de cada proyecto
 const TEMPLATES_DIR = path.join(DATA_DIR, 'templates'); // plantillas personalizadas
 const FOLDERS_DIR = path.join(DATA_DIR, 'folders'); // carpetas de cada usuario para organizar sus proyectos
+const AVATARS_DIR = path.join(DATA_DIR, 'avatars'); // fotos de perfil
 const SNAPSHOT_EVERY = Number(process.env.CANVAS_SNAPSHOT_MIN || 10) * 60 * 1000;
 const MAX_AUTO_SNAPSHOTS = 150;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -38,8 +40,12 @@ fs.mkdirSync(ASSETS_DIR, { recursive: true });
 fs.mkdirSync(HISTORY_DIR, { recursive: true });
 fs.mkdirSync(TEMPLATES_DIR, { recursive: true });
 fs.mkdirSync(FOLDERS_DIR, { recursive: true });
+fs.mkdirSync(AVATARS_DIR, { recursive: true });
 
 const auth = createAuth(DATA_DIR, TOKEN);
+const activity = createActivity(DATA_DIR);
+/** Quién aparece en el historial de actividad. */
+const actor = (who) => (who?.user ? { id: who.user.id, name: who.user.name } : { id: 'legacy', name: 'Alguien' });
 if (!TOKEN && !auth.hasUsers) console.warn('[canvas++] AVISO: sin CANVAS_TOKEN ni usuarios, el servidor no pide autenticación.');
 
 // ---------- utilidades ----------
@@ -380,11 +386,45 @@ const server = http.createServer(async (req, res) => {
         await auth.setPassword(u, body.password);
         return send(res, 200, { token: auth.issue(u) }); // las demás sesiones quedan cerradas
       }
+      if (url.pathname === '/api/auth/avatar' && req.method === 'PUT') {
+        const type = String(req.headers['content-type'] || '');
+        if (!/^image\/(jpeg|png|webp)$/.test(type)) return send(res, 415, { error: 'La foto debe ser JPG, PNG o WebP' });
+        const chunks = [];
+        let size = 0;
+        for await (const ch of req) {
+          size += ch.length;
+          if (size > 1024 * 1024) return send(res, 413, { error: 'La foto es demasiado grande (máx. 1 MB)' });
+          chunks.push(ch);
+        }
+        await fsp.writeFile(path.join(AVATARS_DIR, u.id), Buffer.concat(chunks));
+        await fsp.writeFile(path.join(AVATARS_DIR, u.id + '.type'), type);
+        await auth.setAvatar(u, Date.now());
+        return send(res, 200, auth.publicUser(u));
+      }
+      if (url.pathname === '/api/auth/avatar' && req.method === 'DELETE') {
+        await fsp.rm(path.join(AVATARS_DIR, u.id), { force: true });
+        await auth.setAvatar(u, null);
+        return send(res, 200, auth.publicUser(u));
+      }
       if (url.pathname === '/api/auth/logout-all' && req.method === 'POST') {
         await auth.logoutAll(u);
         return send(res, 200, { token: auth.issue(u) });
       }
       return send(res, 404, { error: 'no encontrado' });
+    }
+
+    // ----- fotos de perfil -----
+    const avm = url.pathname.match(/^\/api\/avatars\/([^/]+)$/);
+    if (avm && req.method === 'GET') {
+      if (!ID_RE.test(avm[1])) return send(res, 400, { error: 'id inválido' });
+      const f = path.join(AVATARS_DIR, avm[1]);
+      try {
+        const [buf, type] = await Promise.all([fsp.readFile(f), fsp.readFile(f + '.type', 'utf8').catch(() => 'image/jpeg')]);
+        res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff', ...corsHeaders() });
+        return res.end(buf);
+      } catch {
+        return send(res, 404, { error: 'sin foto' });
+      }
     }
 
     // ----- usuarios (el administrador los gestiona; los demás solo ven el directorio para compartir) -----
@@ -394,7 +434,7 @@ const server = http.createServer(async (req, res) => {
       if (!me) return send(res, 400, { error: 'El servidor no tiene cuentas de usuario todavía' });
       const isAdmin = me.role === 'admin';
       if (!um[1] && req.method === 'GET') {
-        return send(res, 200, isAdmin ? auth.list() : auth.list().map(({ id, username, name }) => ({ id, username, name })));
+        return send(res, 200, isAdmin ? auth.list() : auth.list().map(({ id, username, name, avatar }) => ({ id, username, name, avatar })));
       }
       if (!isAdmin) return send(res, 403, { error: 'Solo el administrador puede gestionar usuarios' });
       if (!um[1] && req.method === 'POST') {
@@ -413,6 +453,7 @@ const server = http.createServer(async (req, res) => {
         if (target === me) return send(res, 400, { error: 'No puedes borrar tu propia cuenta' });
         const heir = me;
         await auth.remove(target);
+        await fsp.rm(path.join(AVATARS_DIR, target.id), { force: true });
         // sus proyectos pasan al administrador que la borra; se le quita de los compartidos
         for (const p of await allProjects()) {
           let changed = false;
@@ -577,6 +618,21 @@ const server = http.createServer(async (req, res) => {
       return send(res, 405, { error: 'método no permitido' });
     }
 
+    // ----- historial de actividad (quién ha hecho qué) -----
+    const acm = url.pathname.match(/^\/api\/projects\/([^/]+)\/activity$/);
+    if (acm && req.method === 'GET') {
+      const p = await getProject(acm[1]);
+      if (!p || !accessOf(p, who)) return send(res, 404, { error: 'proyecto no existe' });
+      const before = Number(url.searchParams.get('before')) || Infinity;
+      const limit = Math.min(200, Number(url.searchParams.get('limit')) || 50);
+      const list = await activity.list(acm[1], before, limit);
+      // nombre y foto actuales de cada persona
+      return send(res, 200, list.map((e) => {
+        const u = auth.byId(e.user);
+        return u ? { ...e, name: u.name, avatar: u.avatar } : e;
+      }));
+    }
+
     // ----- personas con acceso a un proyecto -----
     const mm = url.pathname.match(/^\/api\/projects\/([^/]+)\/members(?:\/([^/]+))?$/);
     if (mm) {
@@ -601,16 +657,20 @@ const server = http.createServer(async (req, res) => {
         if (!u) return send(res, 404, { error: 'No existe ese usuario' });
         if (u.id === (p.meta.owner || auth.firstAdmin()?.id)) return send(res, 400, { error: 'Ya es el propietario' });
         const r = body.access === 'view' ? 'view' : 'edit';
+        const had = p.meta.members?.[u.id];
         p.meta.members = { ...(p.meta.members || {}), [u.id]: r };
         p.dirty = true;
         await saveNow(p.meta.id);
         kick(p, u.id);
+        if (had !== r) activity.event(p.meta.id, actor(who), had ? 'access' : 'share', { target: u.name, access: r });
         return send(res, 200, list());
       }
       if (mm[2] && req.method === 'DELETE') {
         // el propietario quita a alguien, o alguien sale de un proyecto compartido
         if (access !== 'owner' && mm[2] !== who.user.id) return send(res, 403, { error: 'No permitido' });
         if (p.meta.members?.[mm[2]]) {
+          const target = auth.byId(mm[2]);
+          activity.event(p.meta.id, actor(who), mm[2] === who.user.id ? 'leave' : 'unshare', { target: target?.name });
           delete p.meta.members[mm[2]];
           p.dirty = true;
           await saveNow(p.meta.id);
@@ -630,12 +690,14 @@ const server = http.createServer(async (req, res) => {
       if (!canEdit(access)) return send(res, 403, { error: 'Solo lectura: no puedes cambiar esto' });
       if (what === 'share') {
         if (req.method === 'POST') {
+          if (!p.meta.shareToken) activity.event(pid, actor(who), 'link-on');
           p.meta.shareToken = p.meta.shareToken || crypto.randomBytes(18).toString('base64url');
           p.dirty = true;
           await saveNow(pid);
           return send(res, 200, { token: p.meta.shareToken });
         }
         if (req.method === 'DELETE') {
+          if (p.meta.shareToken) activity.event(pid, actor(who), 'link-off');
           delete p.meta.shareToken;
           p.dirty = true;
           await saveNow(pid);
@@ -650,7 +712,9 @@ const server = http.createServer(async (req, res) => {
         p.dirty = true;
         await saveNow(pid);
         const data = await fsp.readFile(projectFile(pid), 'utf8');
-        return send(res, 201, await snapshot(pid, data, String(body.label || 'Versión guardada')));
+        const snap = await snapshot(pid, data, String(body.label || 'Versión guardada'));
+        activity.event(pid, actor(who), 'version', { label: snap.label });
+        return send(res, 201, snap);
       }
       const snap = ts && (await readSnapshot(pid, ts));
       if (!snap) return send(res, 404, { error: 'versión no encontrada' });
@@ -673,6 +737,8 @@ const server = http.createServer(async (req, res) => {
         const { accepted } = mergeOps(p, ops);
         scheduleSave(pid);
         broadcast(p, { t: 'ops', ops: accepted });
+        const idx = await readIndex(pid);
+        activity.event(pid, actor(who), 'restore', { label: idx.find((v) => String(v.ts) === String(ts))?.label || '', at: Number(ts) });
         return send(res, 200, { ok: true, changed: accepted.length });
       }
       return send(res, 405, { error: 'método no permitido' });
@@ -690,7 +756,10 @@ const server = http.createServer(async (req, res) => {
       let p = await getProject(newId);
       const created = !p;
       if (p && !canEdit(accessOf(p, who))) return send(res, 403, { error: 'No tienes permiso sobre ese proyecto' });
-      if (!p) p = await createProject(newId, String(body.name || '').slice(0, 200), who.user?.id);
+      if (!p) {
+        p = await createProject(newId, String(body.name || '').slice(0, 200), who.user?.id);
+        activity.event(newId, actor(who), 'create', { label: p.meta.name });
+      }
       // proyecto creado sin conexión: el cliente sube sus elementos al darlo de alta
       if (Array.isArray(body.items) && body.items.length) {
         const { accepted } = mergeOps(p, body.items);
@@ -713,7 +782,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'PATCH') {
       if (!canEdit(access)) return send(res, 403, { error: 'Solo lectura' });
       const body = await readBody(req);
-      if (typeof body.name === 'string') p.meta.name = body.name.slice(0, 200);
+      if (typeof body.name === 'string' && body.name.slice(0, 200) !== p.meta.name) {
+        activity.event(id, actor(who), 'rename', { from: p.meta.name, label: body.name.slice(0, 200) });
+        p.meta.name = body.name.slice(0, 200);
+      }
       p.meta.updatedAt = Date.now();
       scheduleSave(id);
       const { shareToken, members, ...m } = publicMeta(p);
@@ -798,10 +870,13 @@ function onConnection(ws, p, id, clientId, readOnly = false) {
     }
     if (readOnly && !(ws.userId && (msg.t === 'cursor' || msg.t === 'laser'))) return; // solo lectura: no puede modificar nada
     if (msg.t === 'ops' && Array.isArray(msg.ops)) {
+      const prev = new Map(msg.ops.filter((o) => o && typeof o.id === 'string').map((o) => [o.id, p.items.get(o.id)]));
       const { accepted, rejected } = mergeOps(p, msg.ops);
       if (accepted.length) {
         scheduleSave(id);
         broadcast(p, { t: 'ops', ops: accepted }, ws);
+        const who = ws.userId ? { id: ws.userId, name: ws.userName } : { id: 'dev:' + clientId, name: 'Dispositivo ' + String(clientId).slice(0, 4) };
+        activity.ops(id, who, accepted.map((op) => ({ op, prev: prev.get(op.id) }))).catch(() => {});
       }
       if (rejected.length) ws.send(JSON.stringify({ t: 'ops', ops: rejected }));
       ws.send(JSON.stringify({ t: 'ack', seq: msg.seq }));
@@ -834,6 +909,7 @@ const heartbeat = setInterval(() => {
 async function shutdown() {
   clearInterval(heartbeat);
   for (const id of projects.keys()) await saveNow(id).catch(() => {});
+  await activity.flushAll();
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);

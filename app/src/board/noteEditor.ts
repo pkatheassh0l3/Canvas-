@@ -5,15 +5,48 @@ import { distToSeg, h } from '../util';
 import { icons } from '../ui/icons';
 import { StrokeCapture, isPenEraser } from './capture';
 import { drawStroke, NOTE_COLORS, NOTE_FONT, PEN_COLORS, wrapText } from './render';
+import { mergeSet, mergeValue, strokeKey } from '../sync/merge';
 
 export interface NoteEditorResult {
   action: 'save' | 'cancel' | 'delete';
   note?: NoteItem;
 }
 
-export function openNoteEditor(note: NoteItem, opts: { isNew: boolean }): Promise<NoteEditorResult> {
+type NoteState = Pick<NoteItem, 'strokes' | 'text' | 'color'>;
+
+export function openNoteEditor(
+  note: NoteItem,
+  opts: {
+    isNew: boolean;
+    /** Guardado en vivo (lo ven los demás dispositivos). */
+    onChange?: (s: NoteState) => void;
+    /** Cambios que llegan de otro dispositivo mientras está abierto. */
+    subscribe?: (fn: (n: NoteItem) => void) => () => void;
+  },
+): Promise<NoteEditorResult> {
   return new Promise((resolve) => {
     const draft: NoteItem = { ...note, strokes: [...note.strokes] };
+    // ---- tiempo real: última versión común y lo que ha llegado de fuera (para "Cancelar" sin perderlo)
+    const snap = (): NoteState => ({ strokes: draft.strokes, text: text.value, color: draft.color });
+    const sameState = (a: NoteState, b: NoteState) => a.text === b.text && a.color === b.color && a.strokes.length === b.strokes.length && a.strokes.every((x, i) => x === b.strokes[i] || strokeKey(x) === strokeKey(b.strokes[i]));
+    let base: NoteState = { strokes: [...note.strokes], text: note.text, color: note.color };
+    const remoteAdded = new Map<string, StrokeData>();
+    const remoteRemoved = new Set<string>();
+    let remoteText: string | null = null;
+    let remoteColor: string | null = null;
+    let liveTimer: any = null;
+    const sendNow = (s: NoteState = snap()) => {
+      clearTimeout(liveTimer);
+      liveTimer = null;
+      if (!opts.onChange || sameState(s, base)) return;
+      base = { strokes: [...s.strokes], text: s.text, color: s.color };
+      opts.onChange(base);
+    };
+    const pushLive = () => {
+      if (!opts.onChange) return;
+      clearTimeout(liveTimer);
+      liveTimer = setTimeout(() => sendNow(), 400);
+    };
     const undo: StrokeData[][] = [];
     const redo: StrokeData[][] = [];
     let tool: 'pen' | 'marker' | 'eraser' = 'pen';
@@ -33,6 +66,7 @@ export function openNoteEditor(note: NoteItem, opts: { isNew: boolean }): Promis
     text.addEventListener('input', () => {
       draft.text = text.value;
       paint();
+      pushLive();
     });
 
     const toolBtns: Record<string, HTMLButtonElement> = {};
@@ -80,6 +114,7 @@ export function openNoteEditor(note: NoteItem, opts: { isNew: boolean }): Promis
               draft.color = c;
               renderNoteColors();
               paint();
+              pushLive();
             },
           }),
         ),
@@ -90,6 +125,15 @@ export function openNoteEditor(note: NoteItem, opts: { isNew: boolean }): Promis
     const btnRedo = h('button', { class: 'tb', title: 'Rehacer', html: icons.redo, onclick: () => doRedo() });
 
     const finish = (r: NoteEditorResult) => {
+      if (r.action === 'save') sendNow();
+      else if (r.action === 'cancel' && opts.onChange) {
+        // se deshace solo lo mío: lo que llegó de otros dispositivos se queda
+        const strokes = note.strokes.filter((st) => !remoteRemoved.has(strokeKey(st)));
+        for (const [k2, st] of remoteAdded) if (!strokes.some((x) => strokeKey(x) === k2)) strokes.push(st);
+        sendNow({ strokes, text: remoteText ?? note.text, color: remoteColor ?? note.color });
+      }
+      unsub?.();
+      clearTimeout(liveTimer);
       window.removeEventListener('resize', layout);
       window.removeEventListener('keydown', onKey, true);
       root.remove();
@@ -145,6 +189,7 @@ export function openNoteEditor(note: NoteItem, opts: { isNew: boolean }): Promis
             undo.push(draft.strokes);
             draft.strokes = [];
             paint();
+            pushLive();
           },
         }),
       ),
@@ -161,6 +206,7 @@ export function openNoteEditor(note: NoteItem, opts: { isNew: boolean }): Promis
       redo.push(draft.strokes);
       draft.strokes = prev;
       paint();
+      pushLive();
     }
     function doRedo() {
       const n = redo.pop();
@@ -168,6 +214,7 @@ export function openNoteEditor(note: NoteItem, opts: { isNew: boolean }): Promis
       undo.push(draft.strokes);
       draft.strokes = n;
       paint();
+      pushLive();
     }
 
     let live: StrokeCapture | null = null;
@@ -263,7 +310,46 @@ export function openNoteEditor(note: NoteItem, opts: { isNew: boolean }): Promis
         if (undo[undo.length - 1] === draft.strokes) undo.pop(); // no borró nada
       }
       paint();
+      pushLive();
     };
+
+    // ---- cambios que llegan de otro dispositivo: se mezclan con lo que estoy dibujando
+    const unsub = opts.subscribe?.((n) => {
+      const theirs: NoteState = { strokes: n.strokes, text: n.text, color: n.color };
+      if (sameState(theirs, base)) return;
+      const bk = new Set(base.strokes.map(strokeKey));
+      const tk = new Set(theirs.strokes.map(strokeKey));
+      for (const st of theirs.strokes) {
+        const k2 = strokeKey(st);
+        if (!bk.has(k2)) {
+          remoteAdded.set(k2, st);
+          remoteRemoved.delete(k2);
+        }
+      }
+      for (const st of base.strokes) {
+        const k2 = strokeKey(st);
+        if (!tk.has(k2)) {
+          remoteRemoved.add(k2);
+          remoteAdded.delete(k2);
+        }
+      }
+      if (theirs.text !== base.text) remoteText = theirs.text;
+      if (theirs.color !== base.color) remoteColor = theirs.color;
+      draft.strokes = mergeSet(base.strokes, draft.strokes, theirs.strokes, strokeKey);
+      const t = mergeValue(base.text, text.value, theirs.text);
+      if (t !== text.value && document.activeElement !== text) text.value = t;
+      draft.text = text.value;
+      draft.color = mergeValue(base.color, draft.color, theirs.color);
+      if (n.baseW !== draft.baseW || n.baseH !== draft.baseH) {
+        draft.baseW = n.baseW;
+        draft.baseH = n.baseH;
+        layout();
+      }
+      base = { strokes: [...theirs.strokes], text: theirs.text, color: theirs.color };
+      renderNoteColors();
+      paint();
+      pushLive();
+    });
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', end);
 

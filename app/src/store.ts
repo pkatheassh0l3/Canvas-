@@ -118,7 +118,25 @@ export async function testServer(): Promise<string> {
   return h.auth ? 'Conectado (con token)' : 'Conectado (servidor sin token)';
 }
 
-export type Member = { id: string; username: string; name: string; access: 'owner' | 'edit' | 'view' };
+export type Member = { id: string; username: string; name: string; access: 'owner' | 'edit' | 'view'; avatar?: number };
+
+/** Entrada del historial de actividad de un proyecto. */
+export interface ActivityEntry {
+  t: 'edit' | 'create' | 'rename' | 'share' | 'access' | 'unshare' | 'leave' | 'link-on' | 'link-off' | 'version' | 'restore';
+  ts: number;
+  start?: number;
+  user: string;
+  name: string;
+  avatar?: number;
+  add?: Record<string, string[]>;
+  edit?: Record<string, string[]>;
+  del?: Record<string, string[]>;
+  target?: string;
+  access?: 'edit' | 'view';
+  label?: string;
+  from?: string;
+  at?: number;
+}
 type Session = { token: string; user: Account };
 const post = (body: object) => ({ method: 'POST', body: JSON.stringify(body) });
 
@@ -136,6 +154,14 @@ export const accounts = {
   updateUser: (id: string, b: { name?: string; role?: string; password?: string }) =>
     api<Account>(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(b) }),
   deleteUser: (id: string) => api(`/api/users/${id}`, { method: 'DELETE' }),
+  uploadAvatar: async (blob: Blob) => {
+    const r = await fetch(serverBase() + '/api/auth/avatar', { method: 'PUT', headers: { Authorization: `Bearer ${settings.token}`, 'Content-Type': blob.type }, body: blob });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new ApiError(r.status, j.error || `Error ${r.status}`);
+    return j as Account;
+  },
+  deleteAvatar: () => api<Account>('/api/auth/avatar', { method: 'DELETE' }),
+  activity: (pid: string, before?: number) => api<ActivityEntry[]>(`/api/projects/${pid}/activity${before ? `?before=${before}` : ''}`),
   members: (pid: string) => api<Member[]>(`/api/projects/${pid}/members`),
   addMember: (pid: string, username: string, access: 'edit' | 'view') => api<Member[]>(`/api/projects/${pid}/members`, post({ username, access })),
   removeMember: (pid: string, uid: string) => api<Member[]>(`/api/projects/${pid}/members/${uid}`, { method: 'DELETE' }),

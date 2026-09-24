@@ -62,7 +62,7 @@ export function createAuth(dataDir, legacyToken) {
     return `${payload}.${sign(payload)}`;
   }
 
-  const publicUser = (u) => u && { id: u.id, username: u.username, name: u.name, role: u.role };
+  const publicUser = (u) => u && { id: u.id, username: u.username, name: u.name, role: u.role, avatar: u.avatar || undefined };
   const byId = (id) => users.find((u) => u.id === id);
   const byName = (n) => users.find((u) => u.username === String(n || '').trim().toLowerCase());
 
@@ -168,6 +168,13 @@ export function createAuth(dataDir, legacyToken) {
     async verifyPassword(u, password) {
       const { hash } = await hashPassword(password || '', u.salt);
       return eq(hash, u.hash);
+    },
+
+    /** Versión de la foto de perfil (null = sin foto). */
+    async setAvatar(u, v) {
+      if (v) u.avatar = v;
+      else delete u.avatar;
+      await save();
     },
 
     async logoutAll(u) {

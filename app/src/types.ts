@@ -217,6 +217,7 @@ export interface BookmarkItem extends BaseItem {
 export interface CommentMsg {
   id: string;
   author: string;
+  authorId?: string; // cuenta que lo escribió (servidor con usuarios)
   text: string;
   at: number;
 }

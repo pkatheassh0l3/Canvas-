@@ -6,7 +6,8 @@ import { icons } from './icons';
 import { askConfirm, askText } from './dialogs';
 import { APP_VERSION, manualCheck } from '../updates';
 import { accounts, health, localProjects, saveItems, remote, removeLocalProject, syncProjectList, testServer, upsertLocalProject } from '../store';
-import { avatarColor, initials, openMyAccount, openUsersAdmin } from './account';
+import { openMyAccount, openUsersAdmin } from './account';
+import { avatarEl } from './avatar';
 import { openNewProject } from './newProject';
 import { folders, FOLDER_COLORS, type Folder } from '../features/folders';
 import type { LoginView } from './login';
@@ -92,7 +93,7 @@ export class HomeView {
     const btn = h(
       'button',
       { class: 'avatar-btn', title: `${u.name} (${u.username})`, onclick: (e: Event) => (e.stopPropagation(), menu.classList.toggle('hidden')) },
-      h('span', { class: 'avatar', style: `background:${avatarColor(u.id)}` }, initials(u.name)),
+      avatarEl(u, 36),
     );
     document.addEventListener('pointerdown', (e) => !menu.contains(e.target as Node) && e.target !== btn && !btn.contains(e.target as Node) && menu.classList.add('hidden'));
     this.userBtn.replaceChildren(btn, menu);

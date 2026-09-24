@@ -88,6 +88,7 @@ import { insertVideo, openVideo, recordVoice, toggleAudio as toggleAudioFn } fro
 import { editMath } from '../features/math';
 import { copyCode, createChart, editChart, editCode, pickEmoji } from '../features/content';
 import { saveAsTemplate } from '../features/saveTemplate';
+import { openActivity } from '../features/activity';
 import { recognizeStroke } from '../features/recognize';
 import { exportAnnotatedPdf, exportBoardPdf, exportDocPdf, saveFile } from '../features/exporter';
 import { closePanels } from '../features/panel';
@@ -511,6 +512,7 @@ export class BoardView {
       sep('Colaborar'),
       item(icons.comment, 'Comentarios', () => openCommentsPanel(this)),
       item(icons.share, 'Compartir', () => openShare(this)),
+      item(icons.history, 'Actividad (quién ha hecho qué)', () => openActivity(this)),
       item(icons.history, 'Historial de versiones', () => openHistory(this)),
       sep('Archivo'),
       item(icons.fileExport, 'Exportar PDF (toda la pizarra)', () => exportBoardPdf(this, 'all')),
@@ -1730,15 +1732,21 @@ export class BoardView {
     const n = this.doc.get(id);
     if (n?.kind !== 'note' || this.editing) return;
     this.editing = true;
-    const r = await openNoteEditor(n, { isNew: false });
+    const before = n;
+    // se guarda en vivo mientras se dibuja; al cerrar, todo se deshace de una vez
+    const r = await openNoteEditor(n, {
+      isNew: false,
+      onChange: (p) => {
+        const c = this.doc.get(id);
+        if (c?.kind === 'note') this.doc.commit([{ ...c, ...p }], false);
+      },
+      subscribe: (fn) => this.watchItem<NoteItem>(id, (c) => c.kind === 'note' && fn(c)),
+    });
     this.editing = false;
     const cur = this.doc.get(id) as NoteItem | undefined;
     if (!cur) return;
-    if (r.action === 'save' && r.note) {
-      this.doc.commit([{ ...cur, strokes: r.note.strokes, text: r.note.text, color: r.note.color }]);
-    } else if (r.action === 'delete') {
-      this.doc.remove([id]);
-    }
+    if (r.action === 'delete') this.doc.remove([id]);
+    else if (JSON.stringify([cur.strokes, cur.text, cur.color]) !== JSON.stringify([before.strokes, before.text, before.color])) this.doc.pushUndo(before, cur);
   }
 
   /** Abre el editor adecuado para un elemento (post-it, texto o documento). */
@@ -1861,6 +1869,15 @@ export class BoardView {
     this.editTableItem(t.id);
   }
 
+  /** Avisa de los cambios que llegan de otros dispositivos a un elemento (para los editores abiertos). */
+  watchItem<T extends Item>(id: string, fn: (it: T) => void) {
+    return this.doc.subscribe((ids) => {
+      if (ids && !ids.has(id)) return;
+      const cur = this.doc.get(id);
+      if (cur && cur.by !== settings.clientId) fn(cur as T);
+    });
+  }
+
   /** Hoja de cálculo a pantalla completa. Guarda en vivo; al cerrar, todo lo editado se deshace de una vez. */
   async editTableItem(id: string) {
     const t = this.doc.get(id);
@@ -1873,12 +1890,7 @@ export class BoardView {
         const cur = this.doc.get(id);
         if (cur?.kind === 'table') this.doc.commit([{ ...cur, cells: s.cells, fmt: s.fmt, colW: s.colW, header: s.header }], false);
       },
-      subscribe: (fn) =>
-        this.doc.subscribe((ids) => {
-          if (ids && !ids.has(id)) return;
-          const cur = this.doc.get(id);
-          if (cur?.kind === 'table' && cur.by !== settings.clientId) fn(cur);
-        }),
+      subscribe: (fn) => this.watchItem<TableItem>(id, (cur) => cur.kind === 'table' && fn(cur)),
     });
     this.editing = false;
     const cur = this.doc.get(id);
@@ -1967,7 +1979,7 @@ export class BoardView {
     if (p?.kind !== 'pdf' || this.editing) return;
     this.editing = true;
     const { openPdfViewer } = await import('../pdf/viewer');
-    const r = await openPdfViewer(p, { page, readOnly: this.readOnly }, (ann) => {
+    const r = await openPdfViewer(p, { page, readOnly: this.readOnly, subscribe: (fn) => this.watchItem<PdfItem>(id, (c) => c.kind === 'pdf' && fn(c.ann ?? {})) }, (ann) => {
       const cur = this.doc.get(id);
       if (cur?.kind === 'pdf') this.doc.commit([{ ...cur, ann }], false);
     });
@@ -2160,7 +2172,7 @@ export class BoardView {
         const cur = this.doc.get(id);
         if (cur?.kind === 'doc') this.doc.commit([{ ...cur, title: saved.title, html: saved.html, pages: saved.pages, preview: saved.preview }], false);
       },
-      { readOnly: this.readOnly },
+      { readOnly: this.readOnly, subscribe: (fn) => this.watchItem<DocItem>(id, (c) => c.kind === 'doc' && fn(c)) },
     );
     this.editing = false;
     if (r.action === 'delete') {

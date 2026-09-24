@@ -1,5 +1,6 @@
 // Visor de PDF de solo lectura con anotaciones: seleccionar texto, resaltar/subrayar/tachar,
 // lápiz, rotulador y borrador. Las anotaciones se guardan en el elemento y se sincronizan.
+import { mergeSet } from '../sync/merge';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import type { PdfAnnotation, PdfItem } from '../types';
 import { settings } from '../settings';
@@ -31,7 +32,11 @@ interface PageView {
   rendering: boolean;
 }
 
-export function openPdfViewer(item: PdfItem, opts: { page?: number; readOnly?: boolean }, onSave: (ann: Ann) => void): Promise<PdfViewerResult> {
+export function openPdfViewer(
+  item: PdfItem,
+  opts: { page?: number; readOnly?: boolean; subscribe?: (fn: (ann: Ann) => void) => () => void },
+  onSave: (ann: Ann) => void,
+): Promise<PdfViewerResult> {
   return new Promise((resolve) => {
     let ann: Ann = JSON.parse(JSON.stringify(item.ann || {}));
     const undo: string[] = [];
@@ -50,7 +55,27 @@ export function openPdfViewer(item: PdfItem, opts: { page?: number; readOnly?: b
     let activePointer = -1;
     const pages: PageView[] = [];
 
-    const save = debounce(() => onSave(ann), 700);
+    // última versión común con los demás dispositivos
+    let base: Ann = JSON.parse(JSON.stringify(item.ann || {}));
+    const save = debounce(() => {
+      onSave(ann);
+      base = JSON.parse(JSON.stringify(ann));
+    }, 400);
+    // anotaciones que llegan de otro dispositivo: se mezclan por id (lo de los dos se conserva)
+    const unsub = opts.subscribe?.((remote) => {
+      const theirs: Ann = remote || {};
+      if (JSON.stringify(theirs) === JSON.stringify(base)) return;
+      const keys = new Set([...Object.keys(ann), ...Object.keys(base), ...Object.keys(theirs)]);
+      const merged: Ann = {};
+      for (const k of keys) {
+        const list = mergeSet(base[k] ?? [], ann[k] ?? [], theirs[k] ?? [], (a) => a.id);
+        if (list.length) merged[k] = list;
+      }
+      base = JSON.parse(JSON.stringify(theirs));
+      ann = merged;
+      redrawAll();
+      if (JSON.stringify(merged) !== JSON.stringify(theirs)) save();
+    });
     const snapshot = () => {
       undo.push(JSON.stringify(ann));
       if (undo.length > 100) undo.shift();
@@ -534,6 +559,7 @@ export function openPdfViewer(item: PdfItem, opts: { page?: number; readOnly?: b
     const ro = new ResizeObserver(() => layout());
     function finish(r: PdfViewerResult) {
       save.flush?.();
+      unsub?.();
       io.disconnect();
       ro.disconnect();
       document.removeEventListener('selectionchange', showSelBarSoon);

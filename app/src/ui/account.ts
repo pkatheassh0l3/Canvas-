@@ -4,6 +4,7 @@ import { accounts } from '../store';
 import { h, toast } from '../util';
 import { icons } from './icons';
 import { askConfirm } from './dialogs';
+import { avatarEl, prepareAvatar } from './avatar';
 
 function modal(title: string, ...content: (Node | string)[]) {
   const bg = h('div', { class: 'modal-bg', onclick: (e: Event) => e.target === bg && bg.remove() }, h('div', { class: 'modal' }, h('h2', {}, title), ...content));
@@ -38,9 +39,54 @@ export function openMyAccount(onChange: () => void) {
   const pw = input('password', { autocomplete: 'new-password' });
   const pw2 = input('password', { autocomplete: 'new-password' });
   const err = h('div', { class: 'test-result err' });
+  // foto de perfil
+  const photoSlot = h('div', { class: 'acct-photo-img' }, avatarEl(u, 72));
+  const refreshPhoto = () => photoSlot.replaceChildren(avatarEl(settings.user!, 72));
+  const pickPhoto = () => {
+    const i = h('input', { type: 'file', accept: 'image/*' }) as HTMLInputElement;
+    i.onchange = async () => {
+      const f = i.files?.[0];
+      if (!f) return;
+      err.textContent = '';
+      try {
+        const me = await accounts.uploadAvatar(await prepareAvatar(f));
+        setAccount(settings.token, me);
+        refreshPhoto();
+        onChange();
+        toast('Foto de perfil actualizada');
+      } catch (e: any) {
+        err.textContent = e?.message || String(e);
+      }
+    };
+    i.click();
+  };
+  const removeBtn = h('button', {
+    class: 'btn ghost',
+    onclick: async () => {
+      try {
+        const me = await accounts.deleteAvatar();
+        setAccount(settings.token, me);
+        refreshPhoto();
+        onChange();
+      } catch (e: any) {
+        err.textContent = e?.message || String(e);
+      }
+    },
+  }, 'Quitar');
   const { close } = modal(
     'Mi cuenta',
-    h('p', {}, `Usuario: ${u.username}${u.role === 'admin' ? ' · administrador' : ''}`),
+    h(
+      'div',
+      { class: 'acct-photo' },
+      photoSlot,
+      h(
+        'div',
+        {},
+        h('b', {}, u.name),
+        h('p', {}, `Usuario: ${u.username}${u.role === 'admin' ? ' · administrador' : ''}`),
+        h('div', { class: 'row' }, h('button', { class: 'btn', onclick: pickPhoto }, 'Cambiar foto'), removeBtn),
+      ),
+    ),
     h('label', {}, 'Nombre (lo ven los demás en comentarios y cursores)', name),
     h(
       'div',
@@ -117,7 +163,7 @@ export function openUsersAdmin() {
     return h(
       'div',
       { class: 'user-row' },
-      h('span', { class: 'avatar', style: `background:${avatarColor(u.id)}` }, initials(u.name)),
+      avatarEl(u, 32),
       h('div', { class: 'grow' }, h('b', {}, u.name, me ? ' (tú)' : ''), h('div', { class: 'hint' }, u.username)),
       role,
       h('button', {
@@ -194,19 +240,4 @@ function resetPassword(u: Account) {
   pw.focus();
 }
 
-export function initials(name: string) {
-  return (
-    name
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((w) => w[0]!.toUpperCase())
-      .join('') || '?'
-  );
-}
-
-export function avatarColor(id: string) {
-  let n = 0;
-  for (const c of id) n = (n * 31 + c.charCodeAt(0)) >>> 0;
-  return `hsl(${n % 360} 55% 45%)`;
-}
+export { initials, avatarColor } from './avatar';

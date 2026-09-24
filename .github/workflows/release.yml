@@ -66,7 +66,11 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+      # el paquete "tools" ya no existe con las cmdline-tools nuevas: solo se instala platform-tools
+      # (Gradle descarga la plataforma y las build-tools que falten; las licencias ya quedan aceptadas)
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
       - name: Generar proyecto Android (Capacitor)
         working-directory: app
         env:

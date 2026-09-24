@@ -2680,3 +2680,87 @@ button.list-main {
 .update-banner .btn:disabled {
   opacity: 0.55;
 }
+
+/* ---------- fotos de perfil y actividad ---------- */
+.avatar {
+  overflow: hidden;
+}
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.avatar-slot {
+  display: inline-flex;
+  flex: none;
+}
+.acct-photo {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.acct-photo p {
+  margin: 2px 0 8px !important;
+}
+.acct-photo .row {
+  gap: 6px;
+}
+.cm-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.act-filter {
+  width: 100%;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  margin: 4px 0 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+.act-day {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 14px 0 6px;
+}
+.act-day::first-letter {
+  text-transform: uppercase;
+}
+.act-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 7px 6px;
+  border-radius: 10px;
+}
+.act-row.clickable {
+  cursor: pointer;
+}
+.act-row.clickable:hover {
+  background: var(--accent-soft);
+}
+.act-text {
+  font-size: 13.5px;
+  line-height: 1.35;
+  min-width: 0;
+}
+.act-text small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.act-more {
+  margin: 10px auto 0;
+  display: flex;
+}
+.share-activity {
+  margin: 4px 0 0;
+}

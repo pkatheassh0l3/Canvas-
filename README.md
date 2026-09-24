@@ -86,7 +86,13 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
   - Cada persona entra con su usuario y contraseña y ve **sus proyectos** y los **compartidos con ella**.
   - Compartir con otras cuentas como **"Puede editar"** o **"Solo ver"**. Quien solo ve puede navegar, presentar y exportar, pero no cambiar nada: lo impide también el servidor.
   - El administrador da de alta, cambia el rol, pone contraseña nueva y borra usuarios. Los proyectos de un usuario borrado pasan al administrador.
-  - En *Mi cuenta*: cambiar el nombre y la contraseña, y cerrar la sesión en los demás dispositivos.
+  - En *Mi cuenta*: **foto de perfil** (se recorta y reduce sola), cambiar el nombre y la contraseña, y cerrar la sesión en los demás dispositivos. La foto aparece en el menú de la cuenta, en *Compartir*, en la lista de usuarios, en los comentarios y en la actividad.
+  - **Actividad** (menú ⋯ o *Compartir* → *Ver quién ha hecho qué*): historial de cada proyecto con quién añadió, editó o borró qué ("Ana añadió 2 post-its y editó 1 tabla"), y quién compartió, cambió permisos, renombró, guardó o restauró versiones. Se filtra por persona, y cada entrada lleva a los elementos que cambió.
+- **Edición en tiempo real en todos los editores**: si el mismo documento, post-it, PDF o tabla está abierto en dos sitios (aunque sea con la misma cuenta), cada uno ve los cambios del otro al momento.
+  - Documentos: se mezclan por párrafos y el cursor no salta.
+  - Post-its: se conservan los trazos de los dos; *Cancelar* deshace solo lo tuyo.
+  - PDF: se conservan las anotaciones de los dos.
+  - Tablas: se mezclan celda a celda.
   - Cada cuenta tiene su propia copia local de proyectos en el dispositivo.
 - El borrador borra trazos, formas (tocando su contorno, así lo dibujado dentro de una forma se borra sin llevársela) y conectores. Al borrar un elemento se borran también los conectores unidos a él.
 - Deshacer y rehacer, duplicar y traer al frente.
@@ -203,7 +209,7 @@ CANVAS_DATA=./data CANVAS_TOKEN=dev node index.js
 | `CANVAS_PUBLIC` | `./public` | Cliente web que se sirve |
 | `CANVAS_SNAPSHOT_MIN` | `10` | Minutos entre copias automáticas del historial |
 
-Estructura de `/data`: `users.json` (cuentas, con contraseñas cifradas con scrypt), `secret.key` (firma de las sesiones), `projects/` (un JSON por proyecto), `assets/` (imágenes, PDF, audio y vídeo), `history/<proyecto>/` (versiones comprimidas), `templates/` (plantillas personalizadas), `folders/` (carpetas de cada usuario) y `trash/` (proyectos borrados).
+Estructura de `/data`: `users.json` (cuentas, con contraseñas cifradas con scrypt), `secret.key` (firma de las sesiones), `projects/` (un JSON por proyecto), `assets/` (imágenes, PDF, audio y vídeo), `history/<proyecto>/` (versiones comprimidas), `templates/` (plantillas personalizadas), `folders/` (carpetas de cada usuario), `avatars/` (fotos de perfil), `activity/` (historial de actividad de cada proyecto) y `trash/` (proyectos borrados).
 
 ## API
 
@@ -212,6 +218,8 @@ Estructura de `/data`: `users.json` (cuentas, con contraseñas cifradas con scry
   - `POST /api/auth/setup {username, name, password, serverToken}`: primer administrador.
   - `POST /api/auth/login {username, password}` y `POST /api/auth/register`: devuelven `{token, user}`. El token de sesión se envía como `Authorization: Bearer …`.
   - `GET|PATCH /api/auth/me`, `POST /api/auth/password {old, password}` y `POST /api/auth/logout-all`.
+  - `PUT|DELETE /api/auth/avatar` (imagen JPG/PNG/WebP, máx. 1 MB) y `GET /api/avatars/:userId`.
+- `GET /api/projects/:id/activity?before=&limit=`: historial de actividad, lo más reciente primero.
 - `GET|POST /api/users` y `PATCH|DELETE /api/users/:id`: gestión de usuarios (solo administrador). Los demás solo pueden listar nombres para compartir.
 - `GET|POST /api/templates`, `GET|PATCH|DELETE /api/templates/:id`: plantillas personalizadas (`{name, category, thumb, shared, items}`).
 - `GET|PUT /api/folders`: carpetas de la cuenta (`{folders: [{id, name, parent, color}], assign: {proyecto: carpeta}}`).

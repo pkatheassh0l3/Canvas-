@@ -6,6 +6,7 @@ import { askConfirm } from '../ui/dialogs';
 import { addAsset, hydrateImages } from '../assets';
 import { buildPreview, sanitizeHtml, sanitizeStored, serializeEditor, wordCount } from './sanitize';
 import { DOC_IMPORT_ACCEPT, importFile, pickFile } from './importers';
+import { mergeBlocks, mergeValue } from '../sync/merge';
 
 export const PAGE_W = 794; // A4 a 96 ppp
 export const PAGE_H = 1123;
@@ -32,7 +33,18 @@ type SaveFn = (doc: DocItem) => void;
 const TEXT_COLORS = ['#1f2328', '#e5484d', '#f76b15', '#30a46c', '#0090ff', '#8e4ec6', '#6b6f76'];
 const HIGHLIGHTS = ['transparent', '#fff1a8', '#d3f5d3', '#cfe8ff', '#ffd6e0', '#e6dcff'];
 
-export function openDocEditor(doc: DocItem, onSave: SaveFn, opts: { readOnly?: boolean } = {}): Promise<DocEditorResult> {
+/** Bloques de primer nivel (párrafos, títulos, listas…) de un HTML guardado. */
+function blocksOf(html: string): string[] {
+  const d = document.createElement('div');
+  d.innerHTML = html;
+  return [...d.childNodes].map((n) => (n.nodeType === 1 ? (n as Element).outerHTML : (n.textContent ?? ''))).filter((x) => x !== '');
+}
+
+export function openDocEditor(
+  doc: DocItem,
+  onSave: SaveFn,
+  opts: { readOnly?: boolean; subscribe?: (fn: (d: DocItem) => void) => () => void } = {},
+): Promise<DocEditorResult> {
   return new Promise((resolve) => {
     let current: DocItem = { ...doc };
     let dirty = false;
@@ -66,14 +78,92 @@ export function openDocEditor(doc: DocItem, onSave: SaveFn, opts: { readOnly?: b
         preview: buildPreview(paper),
       };
     };
+    // última versión común con los demás dispositivos (para mezclar lo que llegue)
+    let base = { title: doc.title, html: sanitizeStored(doc.html || '') };
     const save = () => {
       if (!dirty || opts.readOnly) return;
       dirty = false;
       current = snapshot();
+      base = { title: current.title, html: current.html };
       onSave(current);
       status.textContent = 'Guardado';
     };
-    const autosave = debounce(save, 1200);
+    const autosave = debounce(save, 500);
+
+    // ---------------- cambios que llegan de otro dispositivo ----------------
+    /** Posición del cursor como (bloque, carácter dentro del bloque). */
+    function caret(): { block: number; offset: number } | null {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount || !paper.contains(sel.anchorNode)) return null;
+      let node: Node | null = sel.anchorNode;
+      while (node && node.parentNode !== paper) node = node.parentNode;
+      if (!node) return null;
+      const block = [...paper.childNodes].indexOf(node as ChildNode);
+      const r = document.createRange();
+      r.setStart(node, 0);
+      r.setEnd(sel.anchorNode!, sel.anchorOffset);
+      return { block, offset: r.toString().length };
+    }
+    function placeCaret(block: number, offset: number) {
+      const node = paper.childNodes[Math.min(block, paper.childNodes.length - 1)];
+      if (!node) return;
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      let left = offset;
+      let t: Node | null;
+      let last: Node | null = null;
+      while ((t = walker.nextNode())) {
+        last = t;
+        const len = t.textContent?.length ?? 0;
+        if (left <= len) {
+          const r = document.createRange();
+          r.setStart(t, left);
+          r.collapse(true);
+          const sel = window.getSelection()!;
+          sel.removeAllRanges();
+          sel.addRange(r);
+          return;
+        }
+        left -= len;
+      }
+      const r = document.createRange();
+      if (last) r.setStart(last, last.textContent?.length ?? 0);
+      else r.setStart(node, 0);
+      r.collapse(true);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    const unsub = opts.subscribe?.((d) => {
+      const theirs = { title: d.title, html: sanitizeStored(d.html || '') };
+      if (theirs.html === base.html && theirs.title === base.title) return;
+      const mineHtml = serializeEditor(paper);
+      const B = blocksOf(base.html);
+      const M = blocksOf(mineHtml);
+      const T = blocksOf(theirs.html);
+      const { merged, mineAt } = mergeBlocks(B, M, T);
+      const html = merged.join('');
+      const focused = document.activeElement === paper;
+      const pos = focused ? caret() : null;
+      const scroll = scroller.scrollTop;
+      if (html !== mineHtml) {
+        paper.innerHTML = sanitizeStored(html) || '<p><br></p>';
+        hydrateImages(paper).then(() => updatePages());
+        if (pos) {
+          const at = mineAt[pos.block];
+          placeCaret(at >= 0 ? at : Math.max(0, pos.block), pos.offset);
+        }
+        scroller.scrollTop = scroll;
+      }
+      const newTitle = mergeValue(base.title, title.value.trim() || 'Documento sin título', theirs.title);
+      if (newTitle !== (title.value.trim() || 'Documento sin título') && document.activeElement !== title) title.value = newTitle;
+      base = theirs;
+      // si lo mezclado no es igual a lo que llegó, hay cambios míos que enviar
+      if (html !== theirs.html || newTitle !== theirs.title) {
+        dirty = true;
+        autosave();
+      }
+      updatePages();
+    });
     const markDirty = () => {
       dirty = true;
       status.textContent = 'Guardando…';
@@ -293,6 +383,7 @@ export function openDocEditor(doc: DocItem, onSave: SaveFn, opts: { readOnly?: b
     // ---------------- cierre ----------------
     const finish = (r: DocEditorResult) => {
       autosave.flush?.();
+      unsub?.();
       document.removeEventListener('selectionchange', refreshState);
       window.removeEventListener('resize', fitWidth);
       window.removeEventListener('keydown', onKey, true);
