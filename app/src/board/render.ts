@@ -2,6 +2,7 @@
 import { getStroke } from 'perfect-freehand';
 import type { DocItem, Item, NoteItem, Rect, StrokeData, TextItem } from '../types';
 import { assetImage } from '../assets';
+import { boxBounds, drawBox } from './items';
 
 const pathCache = new WeakMap<StrokeData, Path2D>();
 const boundsCache = new WeakMap<object, Rect>();
@@ -86,7 +87,12 @@ export function strokeBounds(s: StrokeData): Rect {
 export function itemBounds(it: Item): Rect {
   if (it.kind === 'stroke') return strokeBounds(it);
   if (it.kind === 'text') return textBounds(it);
-  return { x: it.x, y: it.y, w: it.w, h: it.h };
+  if (it.kind === 'note' || it.kind === 'doc') return { x: it.x, y: it.y, w: it.w, h: it.h };
+  const c = boundsCache.get(it);
+  if (c) return c;
+  const r = boxBounds(it);
+  boundsCache.set(it, r);
+  return r;
 }
 
 // ---------------- cuadros de texto ----------------
@@ -124,8 +130,11 @@ let redrawHook: () => void = () => {};
 export function setRedrawHook(fn: () => void) {
   redrawHook = fn;
 }
+export function getRedrawHook() {
+  return () => redrawHook();
+}
 
-function sheet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, shadow: boolean, zoom: number) {
+export function sheet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, shadow: boolean, zoom: number) {
   ctx.save();
   if (shadow && zoom > 0.2) {
     ctx.shadowColor = 'rgba(0,0,0,0.16)';
@@ -278,6 +287,13 @@ export function drawItem(ctx: CanvasRenderingContext2D, it: Item, zoom: number) 
   else if (it.kind === 'note') drawNote(ctx, it, zoom);
   else if (it.kind === 'text') drawText(ctx, it);
   else if (it.kind === 'doc') drawDoc(ctx, it, zoom);
+  else drawBox(ctx, it, zoom);
+}
+
+/** Orden de pintado: los marcos siempre debajo del resto. */
+export function paintOrder(items: Item[]): Item[] {
+  const frames = items.filter((i) => i.kind === 'frame');
+  return frames.length ? [...frames, ...items.filter((i) => i.kind !== 'frame')] : items;
 }
 
 /** Renderiza un conjunto de elementos a un canvas (miniaturas / exportar PNG). */
@@ -298,7 +314,7 @@ export function renderToCanvas(items: Item[], maxSize: number, bg = '#faf9f6', p
   ctx.fillRect(0, 0, c.width, c.height);
   ctx.scale(scale, scale);
   ctx.translate(-r.x, -r.y);
-  for (const it of [...items].sort((a, b) => a.z - b.z)) drawItem(ctx, it, scale);
+  for (const it of paintOrder([...items].sort((a, b) => a.z - b.z))) drawItem(ctx, it, scale);
   return c;
 }
 

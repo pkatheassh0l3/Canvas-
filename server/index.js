@@ -232,6 +232,7 @@ const server = http.createServer(async (req, res) => {
             'Content-Length': st.size,
             'Cache-Control': 'private, max-age=31536000, immutable',
             'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': 'sandbox', // un PDF o imagen abierto directamente no puede ejecutar nada
             ...corsHeaders(),
           });
           if (req.method === 'HEAD') return res.end();
@@ -241,15 +242,15 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (req.method === 'PUT') {
+        const type = String(req.headers['content-type'] || 'application/octet-stream').slice(0, 100);
+        if (!/^(image\/(png|jpeg|webp|gif)|application\/pdf)$/.test(type)) return send(res, 415, { error: 'tipo no permitido' });
         const chunks = [];
         let size = 0;
         for await (const c of req) {
           size += c.length;
-          if (size > 50 * 1024 * 1024) return send(res, 413, { error: 'archivo demasiado grande' });
+          if (size > 150 * 1024 * 1024) return send(res, 413, { error: 'archivo demasiado grande' });
           chunks.push(c);
         }
-        const type = String(req.headers['content-type'] || 'application/octet-stream').slice(0, 100);
-        if (!/^image\/(png|jpeg|webp|gif)$/.test(type)) return send(res, 415, { error: 'tipo no permitido' });
         await fsp.writeFile(file + '.tmp', Buffer.concat(chunks));
         await fsp.rename(file + '.tmp', file);
         await fsp.writeFile(file + '.type', type);

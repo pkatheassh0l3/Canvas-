@@ -1,12 +1,17 @@
 // Importación de Word (.docx) y PDF. Las librerías se cargan solo cuando hacen falta.
 import { addAsset } from '../assets';
 import { sanitizeHtml } from './sanitize';
+import { loadPdfjs } from '../pdf/pdfjs';
 
 export interface Imported {
   title: string;
   html: string;
 }
 
+/** Lo que se puede importar dentro de un documento de texto (los PDF van al visor). */
+export const DOC_IMPORT_ACCEPT = '.docx,.txt,.md,.html,.htm,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain';
+
+/** Lo que se puede importar en la pizarra. */
 export const IMPORT_ACCEPT =
   '.docx,.pdf,.txt,.md,.html,.htm,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain';
 
@@ -31,9 +36,7 @@ async function importDocx(file: File): Promise<Imported> {
 }
 
 async function importPdf(file: File, onProgress?: (msg: string) => void): Promise<Imported> {
-  const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const workerUrl: string = (await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')).default;
-  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+  const pdfjs = await loadPdfjs();
   const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
   const pdf = await task.promise;
   const total = Math.min(pdf.numPages, 150);
@@ -93,6 +96,18 @@ export function pickFile(accept: string): Promise<File | null> {
     input.accept = accept;
     input.onchange = () => resolve(input.files?.[0] ?? null);
     input.addEventListener('cancel', () => resolve(null));
+    input.click();
+  });
+}
+
+export function pickFiles(accept: string): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.multiple = true;
+    input.onchange = () => resolve([...(input.files ?? [])]);
+    input.addEventListener('cancel', () => resolve([]));
     input.click();
   });
 }

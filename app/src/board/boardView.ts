@@ -1,7 +1,25 @@
 // Pizarra infinita: render en dos capas, herramientas, gestos táctiles, selección y post-its.
-import type { DocItem, Item, NoteItem, ProjectMeta, Rect, StrokeItem, TextItem, Tool } from '../types';
+import type {
+  BoxItem,
+  DocItem,
+  FrameItem,
+  ImageItem,
+  Item,
+  LinkItem,
+  NoteItem,
+  PdfItem,
+  ProjectMeta,
+  Rect,
+  ShapeItem,
+  ShapeKind,
+  StrokeItem,
+  TableItem,
+  TextItem,
+  TodoItem,
+  Tool,
+} from '../types';
 import { settings, saveSettings } from '../settings';
-import { clamp, distToSeg, h, normRect, rectsIntersect, toast, uid, unionRect } from '../util';
+import { clamp, distToSeg, h, normRect, rectContains, rectsIntersect, toast, uid, unionRect } from '../util';
 import { icons } from '../ui/icons';
 import { askText } from '../ui/dialogs';
 import { BoardDoc } from './doc';
@@ -14,13 +32,30 @@ import {
   itemBounds,
   NOTE_COLORS,
   PEN_COLORS,
+  paintOrder,
   renderToCanvas,
   setRedrawHook,
   TEXT_FONT,
   TEXT_LINE,
 } from './render';
 import { countPages, openDocEditor } from '../docs/editor';
-import { IMPORT_ACCEPT, importFile, pickFile } from '../docs/importers';
+import {
+  domainOf,
+  FRAME_COLORS,
+  frameHeader,
+  isBox,
+  LINK_BASE_H,
+  LINK_BASE_W,
+  resizeMode,
+  shapeHit,
+  TODO_BASE_W,
+  todoCheckAt,
+} from './items';
+import { editTable, editTodo } from './editors';
+import { importPdfFile } from '../pdf/import';
+import { addAsset, downscaleImage, imageSize, uploadPending } from '../assets';
+import { platform } from '../updates';
+import { IMPORT_ACCEPT, importFile, pickFile, pickFiles } from '../docs/importers';
 import { openNoteEditor } from './noteEditor';
 import { SyncClient, type SyncStatus } from '../sync';
 import { remote, upsertLocalProject } from '../store';
@@ -48,8 +83,9 @@ type Gesture =
       tapOn?: string;
       wasSelected: boolean;
     }
-  | { t: 'resize'; id: number; note: NoteItem | DocItem; sx: number; sy: number; w: number; h: number }
-  | { t: 'place'; id: number; sx: number; sy: number; tool: 'note' | 'text' | 'doc' };
+  | { t: 'resize'; id: number; note: BoxItem; sx: number; sy: number; w: number; h: number }
+  | { t: 'place'; id: number; sx: number; sy: number; tool: 'note' | 'text' | 'doc' }
+  | { t: 'shape'; id: number; x0: number; y0: number; x1: number; y1: number };
 
 const SIZES: Record<'pen' | 'marker' | 'eraser', number[]> = {
   pen: [2, 4, 8],
@@ -73,6 +109,7 @@ export class BoardView {
   color = PEN_COLORS[0];
   sizeIdx: Record<'pen' | 'marker' | 'eraser', number> = { pen: 1, marker: 1, eraser: 1 };
   selection = new Set<string>();
+  shapeKind: ShapeKind = 'rect';
 
   private pointers = new Map<number, { x: number; y: number; type: string }>();
   private g: Gesture | null = null;
@@ -113,7 +150,10 @@ export class BoardView {
     this.sync = new SyncClient(meta.id, meta.name, {
       allItems: () => doc.items.values(),
       applyRemote: (items) => doc.applyRemote(items),
-      onStatus: (s) => this.setStatus(s),
+      onStatus: (s) => {
+        this.setStatus(s);
+        if (s === 'online') uploadPending();
+      },
       onMeta: (m) => {
         this.meta = { ...this.meta, name: m.name };
         this.els.title.textContent = m.name;
@@ -182,12 +222,16 @@ export class BoardView {
     );
 
     e.colors = h('div', { class: 'swatches' });
-    e.docImport = h(
-      'button',
-      { class: 'sb', title: 'Importar Word o PDF como documento', onclick: () => this.importDocument() },
-      h('span', { html: icons.upload }),
-      h('em', {}, 'Importar Word/PDF'),
-    );
+    e.insertPanel = this.buildInsertPanel();
+    e.insertBtn = h('button', {
+      class: 'tb',
+      title: 'Insertar: documento, PDF, imagen, tabla, formas…',
+      html: icons.insert,
+      onclick: (ev: Event) => {
+        ev.stopPropagation();
+        e.insertPanel.classList.toggle('hidden');
+      },
+    });
     e.sizes = h('div', { class: 'sizes' });
     const tools = h(
       'div',
@@ -199,10 +243,9 @@ export class BoardView {
       toolBtn('hand', icons.hand, 'Mover pizarra (H, o espacio)'),
       toolBtn('note', icons.note, 'Post-it (N)'),
       toolBtn('text', icons.text, 'Texto (T)'),
-      toolBtn('doc', icons.doc, 'Documento (D)'),
+      e.insertBtn,
       (e.sep1 = h('div', { class: 'sep' })),
       e.colors,
-      e.docImport,
       (e.sep2 = h('div', { class: 'sep' })),
       e.sizes,
     );
@@ -219,12 +262,75 @@ export class BoardView {
 
     e.selbar = h('div', { class: 'selbar hidden' });
 
-    this.root.append(top, tools, zoom, e.selbar);
+    this.root.append(top, tools, zoom, e.selbar, e.insertPanel);
     document.addEventListener('click', this.closeMenu);
     this.refreshUI();
   }
 
-  private closeMenu = () => this.els.menu?.classList.add('hidden');
+  private closeMenu = () => {
+    this.els.menu?.classList.add('hidden');
+    this.els.insertPanel?.classList.add('hidden');
+  };
+
+  /** Panel "Insertar": documentos, contenido y formas. */
+  private buildInsertPanel() {
+    const it = (icon: string, label: string, fn: () => void) =>
+      h(
+        'button',
+        {
+          class: 'ip-item',
+          onclick: (ev: Event) => {
+            ev.stopPropagation();
+            this.els.insertPanel.classList.add('hidden');
+            fn();
+          },
+        },
+        h('span', { html: icon }),
+        h('em', {}, label),
+      );
+    const shape = (k: ShapeKind, icon: string, label: string) =>
+      it(icon, label, () => {
+        this.shapeKind = k;
+        this.setTool('shape');
+        toast('Arrastra en la pizarra para dibujar la forma');
+      });
+    return h(
+      'div',
+      { class: 'insert-panel hidden', onclick: (ev: Event) => ev.stopPropagation() },
+      h('div', { class: 'ip-title' }, 'Documentos'),
+      h(
+        'div',
+        { class: 'ip-grid' },
+        it(icons.doc, 'Documento nuevo', () => this.createDocAt(...this.viewCenter())),
+        it(icons.upload, 'Importar Word / PDF', () => this.importDocument()),
+      ),
+      h('div', { class: 'ip-title' }, 'Contenido'),
+      h(
+        'div',
+        { class: 'ip-grid' },
+        it(icons.image, 'Imagen', () => this.insertImages()),
+        it(icons.table, 'Tabla', () => this.insertTable()),
+        it(icons.todo, 'Lista de tareas', () => this.insertTodo()),
+        it(icons.link, 'Enlace', () => this.insertLink()),
+        it(icons.frame, 'Marco / sección', () => this.insertFrame()),
+        it(icons.text, 'Texto', () => this.setTool('text')),
+      ),
+      h('div', { class: 'ip-title' }, 'Formas'),
+      h(
+        'div',
+        { class: 'ip-grid shapes' },
+        shape('rect', icons.rect, 'Rectángulo'),
+        shape('ellipse', icons.ellipse, 'Elipse'),
+        shape('diamond', icons.diamond, 'Rombo'),
+        shape('line', icons.line, 'Línea'),
+        shape('arrow', icons.arrow, 'Flecha'),
+      ),
+    );
+  }
+
+  private viewCenter(): [number, number] {
+    return [this.view.x + this.w / 2 / this.view.zoom, this.view.y + this.h / 2 / this.view.zoom];
+  }
 
   private toggleMenu() {
     const m = this.els.menu;
@@ -260,18 +366,18 @@ export class BoardView {
 
   private refreshUI() {
     const e = this.els;
-    for (const t of ['pen', 'marker', 'eraser', 'select', 'hand', 'note', 'text', 'doc'] as Tool[])
+    for (const t of ['pen', 'marker', 'eraser', 'select', 'hand', 'note', 'text'] as Tool[])
       e['tool-' + t].classList.toggle('on', this.tool === t);
+    e.insertBtn.classList.toggle('on', this.tool === 'shape' || this.tool === 'doc');
     e.undo.toggleAttribute('disabled', !this.doc.canUndo());
     e.redo.toggleAttribute('disabled', !this.doc.canRedo());
     e.penOnly.classList.toggle('on', settings.penOnly);
     e.zoomLabel.textContent = Math.round(this.view.zoom * 100) + '%';
 
-    const drawing = this.tool === 'pen' || this.tool === 'marker' || this.tool === 'eraser';
-    e.colors.style.display = this.tool === 'pen' || this.tool === 'marker' || this.tool === 'text' ? '' : 'none';
-    e.docImport.style.display = this.tool === 'doc' ? '' : 'none';
+    const drawing = this.tool === 'pen' || this.tool === 'marker' || this.tool === 'eraser' || this.tool === 'shape';
+    e.colors.style.display = ['pen', 'marker', 'text', 'shape'].includes(this.tool) ? '' : 'none';
     e.sizes.style.display = drawing ? '' : 'none';
-    e.sep1.style.display = e.colors.style.display === '' || this.tool === 'doc' ? '' : 'none';
+    e.sep1.style.display = e.colors.style.display;
     e.sep2.style.display = e.sizes.style.display;
     e.colors.replaceChildren(
       ...PEN_COLORS.map((c) =>
@@ -284,7 +390,7 @@ export class BoardView {
       ),
     );
     if (drawing) {
-      const t = this.tool as 'pen' | 'marker' | 'eraser';
+      const t = (this.tool === 'shape' ? 'pen' : this.tool) as 'pen' | 'marker' | 'eraser';
       e.sizes.replaceChildren(
         ...[0, 1, 2].map((i) =>
           h(
@@ -309,57 +415,53 @@ export class BoardView {
       bar.classList.add('hidden');
       return;
     }
-    const strokes = sel.filter((i) => i.kind === 'stroke') as StrokeItem[];
-    const notes = sel.filter((i) => i.kind === 'note') as NoteItem[];
-    const texts = sel.filter((i) => i.kind === 'text') as TextItem[];
-    const docs = sel.filter((i) => i.kind === 'doc') as DocItem[];
+    const of = <K extends Item['kind']>(k: K) => sel.filter((i) => i.kind === k) as Extract<Item, { kind: K }>[];
+    const strokes = of('stroke');
+    const notes = of('note');
+    const texts = of('text');
+    const shapes = of('shape');
+    const frames = of('frame');
+    const one = sel.length === 1 ? sel[0] : null;
     const btn = (icon: string, label: string, fn: () => void, cls = '') =>
       h('button', { class: 'sb ' + cls, title: label, onclick: fn }, h('span', { html: icon }), h('em', {}, label));
-    bar.replaceChildren(
-      ...[
-        notes.length === 1 && sel.length === 1 ? btn(icons.edit, 'Dibujar', () => this.editNote(notes[0].id)) : null,
-        strokes.length ? btn(icons.sticky, 'Hacer post-it', () => this.strokesToNote()) : null,
-        docs.length === 1 && sel.length === 1 ? btn(icons.doc, 'Abrir', () => this.openDoc(docs[0].id)) : null,
-        texts.length === 1 && sel.length === 1 ? btn(icons.edit, 'Editar', () => this.editText(texts[0].id)) : null,
-        texts.length ? btn(icons.minus, 'Letra más pequeña', () => this.scaleText(texts, 1 / 1.25)) : null,
-        texts.length ? btn(icons.plus, 'Letra más grande', () => this.scaleText(texts, 1.25)) : null,
-      ].filter((x): x is HTMLButtonElement => !!x),
-      ...(notes.length
-        ? [
-            h(
-              'div',
-              { class: 'swatches' },
-              ...NOTE_COLORS.map((c) =>
-                h('button', {
-                  class: 'sw sq',
-                  style: `--c:${c}`,
-                  title: 'Color del post-it',
-                  onclick: () => this.doc.commit(notes.map((n) => ({ ...(this.doc.get(n.id) as NoteItem), color: c }))),
-                }),
-              ),
-            ),
-          ]
-        : []),
-      ...(texts.length
-        ? [
-            h(
-              'div',
-              { class: 'swatches' },
-              ...PEN_COLORS.map((c) =>
-                h('button', {
-                  class: 'sw',
-                  style: `--c:${c}`,
-                  title: 'Color del texto',
-                  onclick: () => this.doc.commit(texts.map((t) => ({ ...(this.doc.get(t.id) as TextItem), color: c }))),
-                }),
-              ),
-            ),
-          ]
-        : []),
+    const swatches = (colors: string[], title: string, fn: (c: string) => void, square = false) =>
+      h(
+        'div',
+        { class: 'swatches' },
+        ...colors.map((c) => h('button', { class: 'sw' + (square ? ' sq' : ''), style: `--c:${c}`, title, onclick: () => fn(c) })),
+      );
+    const update = <T extends Item>(list: T[], patch: (it: T) => Partial<T>) =>
+      this.doc.commit(
+        list.map((it) => this.doc.get(it.id) as T | undefined).filter((x): x is T => !!x).map((it) => ({ ...it, ...patch(it) }) as Item),
+      );
+
+    const parts: (HTMLElement | null | false)[] = [
+      // acciones del elemento único
+      one?.kind === 'note' && btn(icons.edit, 'Dibujar', () => this.editNote(one.id)),
+      one?.kind === 'doc' && btn(icons.doc, 'Abrir', () => this.openDoc(one.id)),
+      one?.kind === 'pdf' && btn(icons.pdf, 'Abrir PDF', () => this.openPdf(one.id)),
+      one?.kind === 'text' && btn(icons.edit, 'Editar', () => this.editText(one.id)),
+      one?.kind === 'table' && btn(icons.table, 'Editar tabla', () => this.editTableItem(one.id)),
+      one?.kind === 'todo' && btn(icons.todo, 'Editar lista', () => this.editTodoItem(one.id)),
+      one?.kind === 'link' && btn(icons.link, 'Abrir enlace', () => this.openExternal(one.url)),
+      one?.kind === 'shape' && btn(icons.text, 'Texto', () => this.editShapeLabel(one.id)),
+      one?.kind === 'frame' && btn(icons.edit, 'Renombrar', () => this.renameFrame(one.id)),
+      strokes.length > 0 && btn(icons.sticky, 'Hacer post-it', () => this.strokesToNote()),
+      texts.length > 0 && btn(icons.minus, 'Letra más pequeña', () => this.scaleText(texts, 1 / 1.25)),
+      texts.length > 0 && btn(icons.plus, 'Letra más grande', () => this.scaleText(texts, 1.25)),
+      // colores
+      notes.length > 0 && swatches(NOTE_COLORS, 'Color del post-it', (c) => update(notes, () => ({ color: c })), true),
+      texts.length > 0 && swatches(PEN_COLORS, 'Color del texto', (c) => update(texts, () => ({ color: c }))),
+      shapes.length > 0 && swatches(PEN_COLORS.slice(0, 7), 'Color del borde', (c) => update(shapes, (s) => ({ stroke: c, fill: s.fill === 'none' ? 'none' : c + '33' }))),
+      shapes.some((s) => s.shape !== 'line' && s.shape !== 'arrow') &&
+        btn(icons.fill, 'Relleno', () => update(shapes, (s) => ({ fill: s.fill === 'none' ? s.stroke + '33' : 'none' }))),
+      frames.length > 0 && swatches(FRAME_COLORS, 'Color del marco', (c) => update(frames, () => ({ color: c })), true),
+      // comunes
       btn(icons.copy, 'Duplicar', () => this.duplicate()),
       btn(icons.front, 'Al frente', () => this.bringToFront()),
       btn(icons.trash, 'Borrar', () => this.deleteSelection(), 'danger'),
-    );
+    ];
+    bar.replaceChildren(...(parts.filter(Boolean) as HTMLElement[]));
     bar.classList.remove('hidden');
   }
 
@@ -489,7 +591,7 @@ export class BoardView {
     this.drawGrid(ctx);
     this.applyWorld(ctx);
     const vp = this.worldViewport();
-    for (const it of this.doc.visible()) {
+    for (const it of paintOrder(this.doc.visible())) {
       if (this.hidden.has(it.id)) continue;
       if (!rectsIntersect(itemBounds(it), vp)) continue;
       drawItem(ctx, it, this.view.zoom);
@@ -528,7 +630,8 @@ export class BoardView {
       }
       ctx.restore();
     }
-    if (g?.t === 'resize') drawItem(ctx, { ...g.note, w: g.w, h: g.h }, z);
+    if (g?.t === 'resize') drawItem(ctx, { ...g.note, w: g.w, h: g.h } as Item, z);
+    if (g?.t === 'shape') drawItem(ctx, this.shapeFromGesture(g), z);
 
     // selección
     if (this.selection.size) {
@@ -540,7 +643,7 @@ export class BoardView {
         const it = this.doc.get(id);
         if (!it) continue;
         let b = itemBounds(it);
-        if (g?.t === 'resize' && g.note.id === id) b = { ...b, w: g.w, h: g.h };
+        if (g?.t === 'resize' && g.note.id === id) b = itemBounds({ ...g.note, w: g.w, h: g.h } as Item);
         b = { ...b, x: b.x + off[0], y: b.y + off[1] };
         all = unionRect(all, b);
         ctx.setLineDash([4 / z, 4 / z]);
@@ -576,18 +679,49 @@ export class BoardView {
     }
   }
 
-  /** Post-it o documento seleccionado en solitario (tienen tirador para redimensionar). */
-  private singleSelectedNote(): NoteItem | DocItem | null {
+  /** Elemento con caja seleccionado en solitario (tiene tirador para redimensionar). */
+  private singleSelectedNote(): BoxItem | null {
     if (this.selection.size !== 1) return null;
     const it = this.doc.get([...this.selection][0]);
-    return it?.kind === 'note' || it?.kind === 'doc' ? it : null;
+    return it && isBox(it) ? it : null;
   }
 
-  private handleRect(n: NoteItem | DocItem, rs?: { w: number; h: number }): Rect {
+  private handleRect(n: BoxItem, rs?: { w: number; h: number }): Rect {
     const s = 16 / this.view.zoom;
-    const w = rs ? rs.w : n.w;
-    const hh = rs ? rs.h : n.h;
-    return { x: n.x + w - s / 2, y: n.y + hh - s / 2, w: s, h: s };
+    const it = (rs ? { ...n, w: rs.w, h: rs.h } : n) as BoxItem;
+    if (resizeMode(it) === 'endpoint') return { x: it.x + it.w - s / 2, y: it.y + it.h - s / 2, w: s, h: s };
+    const b = itemBounds(it);
+    return { x: b.x + b.w - s / 2, y: b.y + b.h - s / 2, w: s, h: s };
+  }
+
+  private shapeFromGesture(g: { x0: number; y0: number; x1: number; y1: number }): ShapeItem {
+    const line = this.shapeKind === 'line' || this.shapeKind === 'arrow';
+    let w = g.x1 - g.x0;
+    let hh = g.y1 - g.y0;
+    let x = g.x0;
+    let y = g.y0;
+    if (!line) {
+      x = Math.min(g.x0, g.x1);
+      y = Math.min(g.y0, g.y1);
+      w = Math.abs(w);
+      hh = Math.abs(hh);
+    }
+    return {
+      id: 'preview',
+      kind: 'shape',
+      rev: 0,
+      by: '',
+      z: 0,
+      shape: this.shapeKind,
+      x,
+      y,
+      w,
+      h: hh,
+      stroke: this.color === '#ffffff' ? PEN_COLORS[0] : this.color,
+      fill: 'none',
+      sw: SIZES.pen[this.sizeIdx.pen] / this.view.zoom,
+      label: '',
+    };
   }
 
   // ------------------------------------------------------------------ hit test
@@ -610,13 +744,22 @@ export class BoardView {
     const tol = 6 / this.view.zoom;
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
+      if (it.kind === 'frame') continue; // los marcos, al final (están debajo de todo)
       if (it.kind === 'stroke') {
         if (this.strokeHit(it, x, y, tol)) return it;
+      } else if (it.kind === 'shape') {
+        if (shapeHit(it, x, y, tol * 1.5)) return it;
       } else {
         const b = itemBounds(it);
         const pad = it.kind === 'text' ? tol : 0;
         if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) return it;
       }
+    }
+    // un marco solo se coge por su barra de título (así se puede seleccionar dentro de él)
+    for (let i = list.length - 1; i >= 0; i--) {
+      const f = list[i];
+      if (f.kind !== 'frame') continue;
+      if (x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + frameHeader(f, this.view.zoom)) return f;
     }
     return null;
   }
@@ -644,11 +787,15 @@ export class BoardView {
       if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
     });
     this.root.addEventListener('drop', (e) => {
-      const f = e.dataTransfer?.files?.[0];
-      if (!f) return;
+      const files = [...(e.dataTransfer?.files ?? [])];
+      if (!files.length) return;
       e.preventDefault();
-      this.importDocument(f, this.toWorld(e.clientX, e.clientY));
+      const at = this.toWorld(e.clientX, e.clientY);
+      const imgs = files.filter((f) => f.type.startsWith('image/'));
+      if (imgs.length) this.insertImages(imgs, at);
+      for (const f of files.filter((f) => !f.type.startsWith('image/'))) this.importDocument(f, at);
     });
+    window.addEventListener('paste', this.onPaste);
     window.addEventListener('keydown', this.onKey);
     window.addEventListener('keyup', this.onKeyUp);
   }
@@ -704,6 +851,10 @@ export class BoardView {
       this.schedule();
       return;
     }
+    if (this.tool === 'shape') {
+      this.g = { t: 'shape', id: e.pointerId, x0: wx, y0: wy, x1: wx, y1: wy };
+      return;
+    }
     if (this.tool === 'note' || this.tool === 'text' || this.tool === 'doc') {
       // tocar un texto existente con la herramienta texto lo edita
       if (this.tool === 'text') {
@@ -731,6 +882,15 @@ export class BoardView {
         }
       }
       const hit = this.hitTest(wx, wy);
+      // casillas de las listas de tareas: se marcan con un toque
+      if (hit?.kind === 'todo') {
+        const i = todoCheckAt(hit, wx, wy);
+        if (i >= 0) {
+          const items = hit.items.map((t, j) => (j === i ? { ...t, done: !t.done } : t));
+          this.doc.commit([{ ...hit, items }]);
+          return;
+        }
+      }
       if (hit) {
         const wasSelected = this.selection.has(hit.id);
         if (!wasSelected) {
@@ -807,16 +967,30 @@ export class BoardView {
         g.dy = wy - g.sy;
         if (!g.moved && Math.hypot(g.dx, g.dy) * this.view.zoom > 4) {
           g.moved = true;
+          this.addFrameContents();
           this.hidden = new Set(this.selection);
           this.baseDirty = true;
           this.refreshSelbar();
         }
         break;
       }
-      case 'resize':
-        g.w = Math.max(60, g.note.w + (wx - g.sx));
-        // los documentos mantienen la proporción de un folio A4
-        g.h = g.note.kind === 'doc' ? (g.w * DOC_BASE_H) / DOC_BASE_W : Math.max(60, g.note.h + (wy - g.sy));
+      case 'resize': {
+        const mode = resizeMode(g.note);
+        const min = 30 / this.view.zoom;
+        if (mode === 'endpoint') {
+          g.w = g.note.w + (wx - g.sx);
+          g.h = g.note.h + (wy - g.sy);
+        } else {
+          g.w = Math.max(min, g.note.w + (wx - g.sx));
+          // documentos, PDF e imágenes mantienen la proporción
+          if (mode === 'aspect') g.h = (g.w * g.note.h) / g.note.w;
+          else if (mode === 'free') g.h = Math.max(min, g.note.h + (wy - g.sy));
+        }
+        break;
+      }
+      case 'shape':
+        g.x1 = wx;
+        g.y1 = wy;
         break;
     }
     this.schedule();
@@ -882,8 +1056,26 @@ export class BoardView {
       case 'resize': {
         this.hidden.clear();
         this.baseDirty = true;
-        const cur = this.doc.get(g.note.id) as NoteItem | DocItem | undefined;
+        const cur = this.doc.get(g.note.id) as BoxItem | undefined;
         if (cur && !cancelled) this.doc.commit([{ ...cur, w: g.w, h: g.h }]);
+        break;
+      }
+      case 'shape': {
+        if (cancelled) break;
+        const sh = this.shapeFromGesture(g);
+        const line = sh.shape === 'line' || sh.shape === 'arrow';
+        const tiny = Math.hypot(sh.w, sh.h) * this.view.zoom < 8;
+        if (tiny) {
+          // un toque: forma de tamaño estándar
+          const d = 140 / this.view.zoom;
+          if (line) Object.assign(sh, { w: d, h: 0 });
+          else Object.assign(sh, { x: sh.x - d / 2, y: sh.y - (d * 0.65) / 2, w: d, h: d * 0.65 });
+        }
+        const item: ShapeItem = { ...sh, id: uid(), z: this.doc.nextZ() };
+        this.doc.add([item]);
+        this.setTool('select');
+        this.selection = new Set([item.id]);
+        this.refreshUI();
         break;
       }
       case 'place': {
@@ -913,6 +1105,7 @@ export class BoardView {
   private inMarquee(it: Item, r: Rect) {
     const b = itemBounds(it);
     if (!rectsIntersect(b, r)) return false;
+    if (it.kind === 'frame') return rectContains(r, b); // un marco solo si queda dentro entero
     if (it.kind !== 'stroke') return true;
     for (let i = 0; i < it.pts.length; i += 3) {
       const x = it.pts[i],
@@ -1052,7 +1245,233 @@ export class BoardView {
     if (it.kind === 'note') this.editNote(it.id);
     else if (it.kind === 'text') this.editText(it.id);
     else if (it.kind === 'doc') this.openDoc(it.id);
+    else if (it.kind === 'pdf') this.openPdf(it.id);
+    else if (it.kind === 'table') this.editTableItem(it.id);
+    else if (it.kind === 'todo') this.editTodoItem(it.id);
+    else if (it.kind === 'link') this.openExternal(it.url);
+    else if (it.kind === 'shape') this.editShapeLabel(it.id);
+    else if (it.kind === 'frame') this.renameFrame(it.id);
   }
+
+  /** Al mover un marco se mueve también lo que tiene dentro. */
+  private addFrameContents() {
+    const frames = [...this.selection].map((id) => this.doc.get(id)).filter((i): i is FrameItem => i?.kind === 'frame');
+    for (const f of frames)
+      for (const it of this.doc.visible())
+        if (it.id !== f.id && rectContains({ x: f.x, y: f.y, w: f.w, h: f.h }, itemBounds(it))) this.selection.add(it.id);
+  }
+
+  private openExternal(url: string) {
+    if (!/^https?:\/\//i.test(url)) return;
+    if (platform() === 'android') location.href = url;
+    else window.open(url, '_blank', 'noopener');
+  }
+
+  // ---------------- insertar contenido ----------------
+  /** Añade un elemento en el centro de la vista (sin tapar otros) y lo selecciona. */
+  private place<T extends BoxItem>(it: T): T {
+    const [cx, cy] = this.viewCenter();
+    const b = itemBounds(it);
+    it.x = cx - b.w / 2;
+    it.y = cy - b.h / 2;
+    this.moveToFreeSpot(it);
+    const [added] = this.doc.add([{ ...it, z: it.kind === 'frame' ? 0 : this.doc.nextZ() }]);
+    this.setTool('select');
+    this.selection = new Set([added.id]);
+    this.refreshUI();
+    return added as T;
+  }
+
+  private newBase() {
+    return { id: uid(), rev: 0, by: '', z: 0 };
+  }
+
+  async insertImages(files?: File[], at?: [number, number]) {
+    if (!files) {
+      const f = await pickFiles('image/*');
+      files = f;
+    }
+    const imgs = files.filter((f) => f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    let offset = 0;
+    const added: string[] = [];
+    for (const file of imgs) {
+      const blob = await downscaleImage(file, 2400);
+      const asset = await addAsset(blob);
+      const dims = await imageSize(blob);
+      const maxW = 420 / this.view.zoom;
+      const k = Math.min(1, maxW / dims.w, maxW / dims.h) || 1;
+      const w = (dims.w * k) || maxW;
+      const hh = (dims.h * k) || maxW * 0.75;
+      const [cx, cy] = at ?? this.viewCenter();
+      const it: ImageItem = { ...this.newBase(), kind: 'image', x: cx - w / 2 + offset, y: cy - hh / 2 + offset, w, h: hh, asset, z: this.doc.nextZ() };
+      if (!at) this.moveToFreeSpot(it);
+      this.doc.add([it]);
+      added.push(it.id);
+      offset += 24 / this.view.zoom;
+    }
+    this.setTool('select');
+    this.selection = new Set(added);
+    this.refreshUI();
+  }
+
+  private insertTable() {
+    const fs = 15 / this.view.zoom;
+    const t = this.place<TableItem>({
+      ...this.newBase(),
+      kind: 'table',
+      x: 0,
+      y: 0,
+      w: 420 / this.view.zoom,
+      h: 0,
+      header: true,
+      fs,
+      cells: [
+        ['Columna 1', 'Columna 2', 'Columna 3'],
+        ['', '', ''],
+        ['', '', ''],
+      ],
+    });
+    this.editTableItem(t.id);
+  }
+
+  async editTableItem(id: string) {
+    const t = this.doc.get(id);
+    if (t?.kind !== 'table' || this.editing) return;
+    this.editing = true;
+    const r = await editTable(t);
+    this.editing = false;
+    const cur = this.doc.get(id);
+    if (r && cur?.kind === 'table') this.doc.commit([{ ...cur, cells: r.cells, header: r.header }]);
+  }
+
+  private insertTodo() {
+    const t = this.place<TodoItem>({
+      ...this.newBase(),
+      kind: 'todo',
+      x: 0,
+      y: 0,
+      w: TODO_BASE_W / this.view.zoom,
+      h: 0,
+      title: 'Tareas',
+      items: [{ t: '', done: false }],
+    });
+    this.editTodoItem(t.id, true);
+  }
+
+  async editTodoItem(id: string, isNew = false) {
+    const t = this.doc.get(id);
+    if (t?.kind !== 'todo' || this.editing) return;
+    this.editing = true;
+    const r = await editTodo(t);
+    this.editing = false;
+    const cur = this.doc.get(id);
+    if (cur?.kind !== 'todo') return;
+    if (r) this.doc.commit([{ ...cur, title: r.title, items: r.items }]);
+    else if (isNew) this.doc.remove([id]);
+  }
+
+  private async insertLink() {
+    let url = await askText('Dirección web del enlace', 'https://', 'Añadir');
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    const title = (await askText('Título (opcional)', domainOf(url), 'Aceptar')) || domainOf(url);
+    this.place<LinkItem>({
+      ...this.newBase(),
+      kind: 'link',
+      x: 0,
+      y: 0,
+      w: LINK_BASE_W / this.view.zoom,
+      h: LINK_BASE_H / this.view.zoom,
+      url,
+      title,
+    });
+  }
+
+  private insertFrame() {
+    const w = Math.min(this.w * 0.7, 900) / this.view.zoom;
+    const f = this.place<FrameItem>({
+      ...this.newBase(),
+      kind: 'frame',
+      x: 0,
+      y: 0,
+      w,
+      h: w * 0.6,
+      title: 'Sección',
+      color: FRAME_COLORS[0],
+    });
+    this.renameFrame(f.id);
+  }
+
+  private async renameFrame(id: string) {
+    const f = this.doc.get(id);
+    if (f?.kind !== 'frame') return;
+    const title = await askText('Título del marco', f.title);
+    const cur = this.doc.get(id);
+    if (title != null && cur?.kind === 'frame') this.doc.commit([{ ...cur, title }]);
+  }
+
+  private async editShapeLabel(id: string) {
+    const s = this.doc.get(id);
+    if (s?.kind !== 'shape') return;
+    const label = await askText('Texto de la forma', s.label, 'Aceptar');
+    const cur = this.doc.get(id);
+    if (label != null && cur?.kind === 'shape') this.doc.commit([{ ...cur, label }]);
+  }
+
+  async openPdf(id: string) {
+    const p = this.doc.get(id);
+    if (p?.kind !== 'pdf' || this.editing) return;
+    this.editing = true;
+    const { openPdfViewer } = await import('../pdf/viewer');
+    const r = await openPdfViewer(p, (ann) => {
+      const cur = this.doc.get(id);
+      if (cur?.kind === 'pdf') this.doc.commit([{ ...cur, ann }], false);
+    });
+    this.editing = false;
+    if (r.action === 'delete') {
+      this.doc.remove([id]);
+      this.selection.clear();
+    }
+    this.refreshUI();
+  }
+
+  /** Pegar: imágenes, enlaces o texto. */
+  private onPaste = async (e: ClipboardEvent) => {
+    if (this.editing || !this.root.isConnected) return;
+    const t = e.target as HTMLElement;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    const cd = e.clipboardData;
+    if (!cd) return;
+    const files = [...cd.files];
+    if (files.some((f) => f.type.startsWith('image/'))) {
+      e.preventDefault();
+      return this.insertImages(files);
+    }
+    const text = cd.getData('text/plain').trim();
+    if (!text) return;
+    e.preventDefault();
+    if (/^https?:\/\/\S+$/i.test(text)) {
+      this.place<LinkItem>({
+        ...this.newBase(),
+        kind: 'link',
+        x: 0,
+        y: 0,
+        w: LINK_BASE_W / this.view.zoom,
+        h: LINK_BASE_H / this.view.zoom,
+        url: text,
+        title: domainOf(text),
+      });
+    } else {
+      const [cx, cy] = this.viewCenter();
+      const size = 22 / this.view.zoom;
+      const it: TextItem = { ...this.newBase(), kind: 'text', x: cx, y: cy, text, size, color: PEN_COLORS[0], z: this.doc.nextZ() };
+      this.doc.add([it]);
+      this.setTool('select');
+      this.selection = new Set([it.id]);
+      this.refreshUI();
+    }
+  };
 
   // ---------------- cuadros de texto ----------------
   private createTextAt(wx: number, wy: number) {
@@ -1171,12 +1590,12 @@ export class BoardView {
   }
 
   /** Desplaza un documento a la derecha hasta que no tape a otro elemento. */
-  private moveToFreeSpot(d: DocItem) {
+  private moveToFreeSpot(d: BoxItem) {
     const gap = 30 / this.view.zoom;
     for (let i = 0; i < 30; i++) {
-      const r = { x: d.x, y: d.y, w: d.w, h: d.h };
-      if (!this.doc.visible().some((it) => rectsIntersect(itemBounds(it), r))) return;
-      d.x += d.w + gap;
+      const r = itemBounds({ ...d } as Item);
+      if (!this.doc.visible().some((it) => it.kind !== 'frame' && rectsIntersect(itemBounds(it), r))) return;
+      d.x += r.w + gap;
     }
   }
 
@@ -1218,6 +1637,34 @@ export class BoardView {
     const [wx, wy] = at ?? [this.view.x + this.w / 2 / this.view.zoom, this.view.y + this.h / 2 / this.view.zoom];
     const t = toast(`Importando ${file.name}…`, 60000);
     try {
+      if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+        // los PDF son de solo lectura: se abren en el visor con anotaciones
+        const res = await importPdfFile(file, (m) => t && (t.textContent = m));
+        const [pw, ph] = res.sizes[0] ?? [595, 842];
+        const w = DOC_BASE_W / this.view.zoom;
+        const p: PdfItem = {
+          ...this.newBase(),
+          kind: 'pdf',
+          x: wx - w / 2,
+          y: wy - (w * ph) / pw / 2,
+          w,
+          h: (w * ph) / pw,
+          title: res.title,
+          file: res.file,
+          thumb: res.thumb,
+          pages: res.pages,
+          sizes: res.sizes,
+          ann: {},
+          z: this.doc.nextZ(),
+        };
+        this.moveToFreeSpot(p);
+        this.doc.add([p]);
+        this.setTool('select');
+        this.selection = new Set([p.id]);
+        this.refreshUI();
+        toast(`PDF importado: ${file.name}`);
+        return;
+      }
       const res = await importFile(file, (m) => t && (t.textContent = m));
       const d = this.newDoc(wx, wy, res.title, res.html);
       this.moveToFreeSpot(d);
@@ -1361,6 +1808,7 @@ export class BoardView {
     cancelAnimationFrame(this.raf);
     window.removeEventListener('keydown', this.onKey);
     window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('paste', this.onPaste);
     document.removeEventListener('click', this.closeMenu);
     this.root.remove();
   }

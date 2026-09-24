@@ -5,7 +5,7 @@ import { icons } from '../ui/icons';
 import { askConfirm } from '../ui/dialogs';
 import { addAsset, hydrateImages } from '../assets';
 import { buildPreview, sanitizeHtml, sanitizeStored, serializeEditor, wordCount } from './sanitize';
-import { IMPORT_ACCEPT, importFile, pickFile } from './importers';
+import { DOC_IMPORT_ACCEPT, importFile, pickFile } from './importers';
 
 export const PAGE_W = 794; // A4 a 96 ppp
 export const PAGE_H = 1123;
@@ -225,7 +225,7 @@ export function openDocEditor(doc: DocItem, onSave: SaveFn): Promise<DocEditorRe
     }
 
     async function importInto() {
-      const f = await pickFile(IMPORT_ACCEPT);
+      const f = await pickFile(DOC_IMPORT_ACCEPT);
       if (!f) return;
       busy.classList.remove('hidden');
       try {
@@ -329,7 +329,7 @@ export function openDocEditor(doc: DocItem, onSave: SaveFn): Promise<DocEditorRe
         title,
         status,
         h('div', { class: 'grow' }),
-        h('button', { class: 'btn ghost', onclick: importInto }, h('span', { html: icons.upload }), 'Importar Word/PDF'),
+        h('button', { class: 'btn ghost', onclick: importInto }, h('span', { html: icons.upload }), 'Importar Word'),
         h('button', {
           class: 'tb danger',
           title: 'Eliminar documento',

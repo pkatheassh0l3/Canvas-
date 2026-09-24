@@ -13,9 +13,16 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
 - Post-its con texto, 7 colores, redimensionables y movibles.
 - **Varios proyectos**, con miniatura, renombrar y eliminar.
 - **Sincronización en tiempo real** por WebSocket. Si se pierde la conexión se sigue trabajando y los cambios se suben al volver.
-- **Cuadros de texto** (herramienta **T**): tocas la pizarra y escribes. Se pueden mover, cambiar de color y de tamaño, y editar con doble toque.
-- **Documentos** (herramienta **D**): un editor tipo Word con folios A4 que se desplazan en vertical. Incluye títulos, negrita, cursiva, subrayado, colores, resaltado, listas, alineación, imágenes y saltos de página. En la pizarra, un documento de varias páginas se ve como una **pila de folios**; al tocarlo se abre.
-- **Importar Word y PDF**: desde el menú ⋯, con el botón que aparece al elegir la herramienta Documento, o arrastrando el archivo a la pizarra. Un `.docx` se convierte en texto editable con sus imágenes. Un PDF se importa página a página como imágenes, y puedes escribir debajo. También admite `.txt`, `.md` y `.html`.
+- **Botón Insertar (+)** en la barra inferior, con todo lo que se puede añadir a la pizarra:
+  - **Documento nuevo**: editor tipo Word con folios A4 deslizables. Incluye títulos, negrita, cursiva, colores, resaltado, listas, alineación, imágenes y saltos de página. En la pizarra se ve como una **pila de folios**.
+  - **Importar Word / PDF**: un `.docx` se convierte en documento editable. Un **PDF** se abre en un **visor de solo lectura** donde puedes **seleccionar y copiar texto**, **resaltarlo, subrayarlo o tacharlo**, y **dibujar encima** con lápiz o rotulador (con borrador y deshacer). Las anotaciones se sincronizan y la primera página se ve en la pizarra con sus marcas.
+  - **Imagen**: desde archivo o cámara (en Android), pegándola con Ctrl+V o arrastrándola. Las fotos grandes se reducen automáticamente.
+  - **Tabla**: editor de celdas con filas y columnas, y cabecera opcional (Tab pasa a la celda siguiente).
+  - **Lista de tareas**: las casillas se marcan tocándolas directamente en la pizarra.
+  - **Enlace**: tarjeta con el dominio que se abre en el navegador. Pegar una URL crea un enlace.
+  - **Marco / sección**: agrupa una zona de la pizarra. Al moverlo se mueve lo que tiene dentro.
+  - **Formas**: rectángulo, elipse, rombo, línea y flecha, con color, relleno y texto dentro.
+- **Cuadros de texto** (herramienta **T**): tocas la pizarra y escribes. Se pueden mover, cambiar de color y de tamaño, y editar con doble toque. Pegar texto crea un cuadro de texto.
 - Deshacer y rehacer, duplicar, traer al frente y exportar a PNG.
 - Atajos: `P` lápiz · `M` rotulador · `E` borrador · `V` seleccionar · `H` mano · `N` post-it · `T` texto · `D` documento · `F` ver todo · `Espacio` + arrastrar para mover · `Ctrl+Z` / `Ctrl+Y` · `Supr`.
 

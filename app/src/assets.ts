@@ -11,11 +11,21 @@ const urls = new Map<string, string>();
 const images = new Map<string, HTMLImageElement>();
 const inflight = new Map<string, Promise<Blob | null>>();
 
+// Las escrituras en la lista de pendientes se hacen en serie (evita perder ids si se añaden dos a la vez).
+let chain: Promise<unknown> = Promise.resolve();
+function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const p = chain.then(fn, fn);
+  chain = p.catch(() => {});
+  return p;
+}
+
 export async function addAsset(blob: Blob): Promise<string> {
   const id = 'a' + uid(20);
   await set(id, blob, store);
-  const pending = ((await get<string[]>(PENDING, store)) ?? []).concat(id);
-  await set(PENDING, pending, store);
+  await serial(async () => {
+    const pending = (await get<string[]>(PENDING, store)) ?? [];
+    await set(PENDING, [...pending, id], store);
+  });
   uploadPending();
   return id;
 }
@@ -26,25 +36,35 @@ export async function addAssetFromDataUrl(dataUrl: string): Promise<string> {
 }
 
 let uploading = false;
-/** Sube al NAS las imágenes creadas sin conexión (se reintenta en cada llamada). */
-export async function uploadPending() {
-  if (uploading || !hasServer()) return;
+let again = false;
+/** Sube al NAS las imágenes/PDF creados sin conexión (se reintenta en cada llamada y al reconectar). */
+export async function uploadPending(): Promise<void> {
+  if (!hasServer()) return;
+  if (uploading) {
+    again = true; // se añadió algo mientras se subía: otra vuelta al terminar
+    return;
+  }
   uploading = true;
   try {
-    let pending = (await get<string[]>(PENDING, store)) ?? [];
-    for (const id of [...pending]) {
-      const blob = await get<Blob>(id, store);
-      if (blob) {
-        const r = await fetch(`${serverBase()}/api/assets/${id}`, {
-          method: 'PUT',
-          headers: { Authorization: `Bearer ${settings.token}`, 'Content-Type': blob.type || 'image/png' },
-          body: blob,
-        }).catch(() => null);
-        if (!r || !r.ok) break; // sin conexión: se reintentará
+    do {
+      again = false;
+      const pending = (await get<string[]>(PENDING, store)) ?? [];
+      for (const id of pending) {
+        const blob = await get<Blob>(id, store);
+        if (blob) {
+          const r = await fetch(`${serverBase()}/api/assets/${id}`, {
+            method: 'PUT',
+            headers: { Authorization: `Bearer ${settings.token}`, 'Content-Type': blob.type || 'application/octet-stream' },
+            body: blob,
+          }).catch(() => null);
+          if (!r || (!r.ok && r.status !== 415 && r.status !== 413)) return; // sin conexión: se reintentará
+        }
+        await serial(async () => {
+          const cur = (await get<string[]>(PENDING, store)) ?? [];
+          await set(PENDING, cur.filter((p) => p !== id), store);
+        });
       }
-      pending = pending.filter((p) => p !== id);
-      await set(PENDING, pending, store);
-    }
+    } while (again);
   } finally {
     uploading = false;
   }
@@ -117,4 +137,36 @@ export async function assetCount() {
 
 export async function removeAsset(id: string) {
   await del(id, store);
+}
+
+/** Tamaño natural de una imagen. */
+export function imageSize(blob: Blob): Promise<{ w: number; h: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const u = URL.createObjectURL(blob);
+    img.onload = () => {
+      resolve({ w: img.naturalWidth, h: img.naturalHeight });
+      URL.revokeObjectURL(u);
+    };
+    img.onerror = () => resolve({ w: 0, h: 0 });
+    img.src = u;
+  });
+}
+
+/** Reduce fotos enormes (p. ej. de la cámara) para no llenar el NAS; GIF y PNG pequeños se dejan tal cual. */
+export async function downscaleImage(file: Blob, max: number): Promise<Blob> {
+  if (file.type === 'image/gif') return file;
+  const { w, h } = await imageSize(file);
+  if (!w || (Math.max(w, h) <= max && file.size < 3_000_000)) return file;
+  const k = Math.min(1, max / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * k);
+  c.height = Math.round(h * k);
+  const img = new Image();
+  const u = URL.createObjectURL(file);
+  await new Promise((r) => ((img.onload = r), (img.src = u)));
+  c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(u);
+  const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+  return new Promise((r) => c.toBlob((b) => r(b ?? file), type, 0.88));
 }
