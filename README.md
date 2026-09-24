@@ -77,6 +77,7 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
   - El administrador da de alta, cambia el rol, pone contraseña nueva y borra usuarios. Los proyectos de un usuario borrado pasan al administrador.
   - En *Mi cuenta*: cambiar el nombre y la contraseña, y cerrar la sesión en los demás dispositivos.
   - Cada cuenta tiene su propia copia local de proyectos en el dispositivo.
+- El borrador borra trazos, formas (tocando su contorno, así lo dibujado dentro de una forma se borra sin llevársela) y conectores. Al borrar un elemento se borran también los conectores unidos a él.
 - Deshacer y rehacer, duplicar y traer al frente.
 - Atajos: `P` lápiz · `M` rotulador · `E` borrador · `V` seleccionar · `H` mano · `L` láser · `C` conector · `N` post-it · `T` texto · `D` documento · `F` ver todo · `Ctrl+F` buscar · `Ctrl+G` agrupar (`Ctrl+Shift+G` desagrupar) · `Ctrl+L` bloquear · `Alt+B` / `Alt+1…9` vistas · `Espacio` + arrastrar para mover · `Ctrl+Z` / `Ctrl+Y` · `Supr`.
 

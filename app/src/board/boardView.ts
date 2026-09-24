@@ -62,6 +62,7 @@ import {
   LINK_BASE_W,
   resizeMode,
   shapeHit,
+  shapeOutlineHit,
   TODO_BASE_W,
   todoCheckAt,
 } from './items';
@@ -1597,13 +1598,26 @@ export class BoardView {
     if (this.g?.t !== 'erase') return;
     const rad = this.eraserRadius();
     let changed = false;
+    const erased: string[] = [];
     for (const it of this.shown()) {
-      if (it.kind !== 'stroke' || this.g.hit.has(it.id) || this.isLocked(it)) continue;
-      if (this.strokeHit(it, x, y, rad)) {
+      if (this.g.hit.has(it.id) || this.isLocked(it) || this.layerLocked(it)) continue;
+      let hit = false;
+      if (it.kind === 'stroke') hit = this.strokeHit(it, x, y, rad);
+      else if (it.kind === 'shape') {
+        const [lx, ly] = toItemSpace(it, x, y); // formas giradas
+        hit = shapeOutlineHit(it, lx, ly, rad);
+      } else if (it.kind === 'connector') hit = connectorHit(it, x, y, rad + it.sw / 2);
+      if (hit) {
         this.g.hit.add(it.id);
         this.hidden.add(it.id);
+        erased.push(it.id);
         changed = true;
       }
+    }
+    // los conectores pegados a una forma borrada se van con ella
+    for (const id of this.attachedConnectors(erased)) {
+      this.g.hit.add(id);
+      this.hidden.add(id);
     }
     if (changed) this.baseDirty = true;
     this.schedule();
@@ -2484,6 +2498,16 @@ export class BoardView {
     this.doc.commit(sel.sort((a, b) => a.z - b.z).map((it) => ({ ...it, z: this.doc.nextZ() })));
   }
 
+  /** Conectores unidos a alguno de estos elementos (se borran con ellos; deshacer los recupera a la vez). */
+  attachedConnectors(ids: Iterable<string>): string[] {
+    const set = new Set(ids);
+    if (!set.size) return [];
+    const out: string[] = [];
+    for (const c of this.shown())
+      if (c.kind === 'connector' && !set.has(c.id) && ((c.from.id && set.has(c.from.id)) || (c.to.id && set.has(c.to.id)))) out.push(c.id);
+    return out;
+  }
+
   deleteSelection() {
     if (!this.selection.size) return;
     const ids = [...this.selection].filter((id) => {
@@ -2491,7 +2515,7 @@ export class BoardView {
       return it && !this.isLocked(it);
     });
     if (ids.length < this.selection.size) toast('Los elementos bloqueados no se borran');
-    this.doc.remove(ids);
+    this.doc.remove([...ids, ...this.attachedConnectors(ids)]);
     this.selection.clear();
     this.refreshUI();
   }

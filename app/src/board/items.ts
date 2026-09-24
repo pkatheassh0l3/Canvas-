@@ -319,6 +319,59 @@ export function shapeHit(s: ShapeItem, x: number, y: number, tol: number) {
   return x >= r.x - tol && x <= r.x + r.w + tol && y >= r.y - tol && y <= r.y + r.h + tol;
 }
 
+/** Distancia de un punto a un segmento. */
+function segDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const l2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / l2));
+  return Math.hypot(x1 + t * dx - px, y1 + t * dy - py);
+}
+
+/**
+ * ¿Toca el borrador el contorno de la forma? Solo el contorno: así se puede borrar lo dibujado
+ * dentro de un rectángulo sin llevarse el rectángulo.
+ */
+export function shapeOutlineHit(s: ShapeItem, x: number, y: number, rad: number) {
+  const tol = rad + s.sw / 2;
+  if (s.shape === 'line' || s.shape === 'arrow') return segDist(x, y, s.x, s.y, s.x + s.w, s.y + s.h) <= tol;
+  const r = shapeRect(s);
+  let pts: [number, number][];
+  if (s.shape === 'ellipse') {
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    pts = [];
+    for (let i = 0; i <= 48; i++) {
+      const a = (i / 48) * Math.PI * 2;
+      pts.push([cx + (Math.cos(a) * r.w) / 2, cy + (Math.sin(a) * r.h) / 2]);
+    }
+  } else if (s.shape === 'triangle')
+    pts = [
+      [r.x + r.w / 2, r.y],
+      [r.x + r.w, r.y + r.h],
+      [r.x, r.y + r.h],
+      [r.x + r.w / 2, r.y],
+    ];
+  else if (s.shape === 'diamond')
+    pts = [
+      [r.x + r.w / 2, r.y],
+      [r.x + r.w, r.y + r.h / 2],
+      [r.x + r.w / 2, r.y + r.h],
+      [r.x, r.y + r.h / 2],
+      [r.x + r.w / 2, r.y],
+    ];
+  else
+    pts = [
+      [r.x, r.y],
+      [r.x + r.w, r.y],
+      [r.x + r.w, r.y + r.h],
+      [r.x, r.y + r.h],
+      [r.x, r.y],
+    ];
+  for (let i = 0; i < pts.length - 1; i++) if (segDist(x, y, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]) <= tol) return true;
+  return false;
+}
+
 // ------------------------------------------------------------------ marcos
 export const FRAME_COLORS = ['#e8f2ff', '#eaf7ea', '#fff5d6', '#fde8ee', '#efe9ff', '#f1efe9'];
 
