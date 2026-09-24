@@ -36,7 +36,36 @@ export interface NoteItem extends BaseItem {
   strokes: StrokeData[];
 }
 
-export type Item = StrokeItem | NoteItem;
+/** Cuadro de texto libre sobre la pizarra. */
+export interface TextItem extends BaseItem {
+  kind: 'text';
+  x: number;
+  y: number;
+  text: string;
+  size: number; // tamaño de letra en unidades del mundo
+  color: string;
+}
+
+/** Vista previa del documento para dibujarla en la pizarra sin renderizar HTML. */
+export interface DocPreview {
+  blocks: { t: string; s: 'h' | 'p' }[];
+  img?: string; // asset de la primera página (PDF importado / imagen inicial)
+}
+
+/** Documento de texto enriquecido (estilo Word). Se ve como una pila de folios. */
+export interface DocItem extends BaseItem {
+  kind: 'doc';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  title: string;
+  html: string; // HTML saneado; las imágenes son <img data-asset="id">
+  pages: number;
+  preview: DocPreview;
+}
+
+export type Item = StrokeItem | NoteItem | TextItem | DocItem;
 
 export interface ProjectMeta {
   id: string;
@@ -55,7 +84,7 @@ export interface Rect {
   h: number;
 }
 
-export type Tool = 'pen' | 'marker' | 'eraser' | 'select' | 'hand' | 'note';
+export type Tool = 'pen' | 'marker' | 'eraser' | 'select' | 'hand' | 'note' | 'text' | 'doc';
 
 export function isNewer(a: BaseItem, b?: BaseItem): boolean {
   if (!b) return true;

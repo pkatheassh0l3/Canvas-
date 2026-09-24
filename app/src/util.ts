@@ -97,6 +97,7 @@ export function toast(msg: string, ms = 2200) {
   host.append(t);
   setTimeout(() => t.classList.add('out'), ms);
   setTimeout(() => t.remove(), ms + 400);
+  return t;
 }
 
 export function formatDate(ms: number) {

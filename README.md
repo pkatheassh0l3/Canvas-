@@ -13,8 +13,11 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
 - Post-its con texto, 7 colores, redimensionables y movibles.
 - **Varios proyectos**, con miniatura, renombrar y eliminar.
 - **Sincronización en tiempo real** por WebSocket. Si se pierde la conexión se sigue trabajando y los cambios se suben al volver.
+- **Cuadros de texto** (herramienta **T**): tocas la pizarra y escribes. Se pueden mover, cambiar de color y de tamaño, y editar con doble toque.
+- **Documentos** (herramienta **D**): un editor tipo Word con folios A4 que se desplazan en vertical. Incluye títulos, negrita, cursiva, subrayado, colores, resaltado, listas, alineación, imágenes y saltos de página. En la pizarra, un documento de varias páginas se ve como una **pila de folios**; al tocarlo se abre.
+- **Importar Word y PDF**: desde el menú ⋯, con el botón que aparece al elegir la herramienta Documento, o arrastrando el archivo a la pizarra. Un `.docx` se convierte en texto editable con sus imágenes. Un PDF se importa página a página como imágenes, y puedes escribir debajo. También admite `.txt`, `.md` y `.html`.
 - Deshacer y rehacer, duplicar, traer al frente y exportar a PNG.
-- Atajos: `P` lápiz · `M` rotulador · `E` borrador · `V` seleccionar · `H` mano · `N` post-it · `F` ver todo · `Espacio` + arrastrar para mover · `Ctrl+Z` / `Ctrl+Y` · `Supr`.
+- Atajos: `P` lápiz · `M` rotulador · `E` borrador · `V` seleccionar · `H` mano · `N` post-it · `T` texto · `D` documento · `F` ver todo · `Espacio` + arrastrar para mover · `Ctrl+Z` / `Ctrl+Y` · `Supr`.
 
 | Proyectos | Editor de post-it |
 |---|---|
@@ -36,7 +39,7 @@ Pizarra infinita para bocetar con el lápiz de la tablet. Los proyectos se sincr
 ```
 
 - `app/`: cliente en TypeScript + Vite (Canvas 2D y [perfect-freehand](https://github.com/steveruizok/perfect-freehand)). La misma base de código se empaqueta para Android y Windows.
-- `server/`: servidor Node de un solo archivo (`ws` es su única dependencia). Guarda cada proyecto en `/data/projects/<id>.json` y mueve los proyectos borrados a `/data/trash/`. También sirve el cliente web.
+- `server/`: servidor Node de un solo archivo (`ws` es su única dependencia). Guarda cada proyecto en `/data/projects/<id>.json`, las imágenes de los documentos en `/data/assets/`, y mueve los proyectos borrados a `/data/trash/`. También sirve el cliente web.
 - **Sincronización:** cada trazo o post-it es un elemento independiente con su versión (`rev`, `by`). En caso de conflicto gana el cambio más reciente, elemento por elemento. Cada dispositivo guarda una copia en IndexedDB, así que funciona sin conexión.
 
 ## 1. Instalar el servidor en el NAS
@@ -113,6 +116,7 @@ CANVAS_DATA=./data CANVAS_TOKEN=dev node index.js
 - `GET /api/health`
 - `GET|POST /api/projects`: listar y crear. `POST {id, name, items?}` sube proyectos creados sin conexión.
 - `GET|PATCH|DELETE /api/projects/:id`
+- `GET|PUT /api/assets/:id`: imágenes de documentos (png, jpeg, webp o gif; hasta 50 MB).
 - `WS /ws?project=&token=&client=`: mensajes `snapshot`, `ops` y `ack`.
 
 ## Licencia

@@ -1,12 +1,26 @@
 // Pizarra infinita: render en dos capas, herramientas, gestos táctiles, selección y post-its.
-import type { Item, NoteItem, ProjectMeta, Rect, StrokeItem, Tool } from '../types';
+import type { DocItem, Item, NoteItem, ProjectMeta, Rect, StrokeItem, TextItem, Tool } from '../types';
 import { settings, saveSettings } from '../settings';
 import { clamp, distToSeg, h, normRect, rectsIntersect, toast, uid, unionRect } from '../util';
 import { icons } from '../ui/icons';
 import { askText } from '../ui/dialogs';
 import { BoardDoc } from './doc';
 import { StrokeCapture, isPenEraser } from './capture';
-import { drawItem, drawStroke, itemBounds, NOTE_COLORS, PEN_COLORS, renderToCanvas } from './render';
+import {
+  DOC_BASE_H,
+  DOC_BASE_W,
+  drawItem,
+  drawStroke,
+  itemBounds,
+  NOTE_COLORS,
+  PEN_COLORS,
+  renderToCanvas,
+  setRedrawHook,
+  TEXT_FONT,
+  TEXT_LINE,
+} from './render';
+import { countPages, openDocEditor } from '../docs/editor';
+import { IMPORT_ACCEPT, importFile, pickFile } from '../docs/importers';
 import { openNoteEditor } from './noteEditor';
 import { SyncClient, type SyncStatus } from '../sync';
 import { remote, upsertLocalProject } from '../store';
@@ -34,8 +48,8 @@ type Gesture =
       tapOn?: string;
       wasSelected: boolean;
     }
-  | { t: 'resize'; id: number; note: NoteItem; sx: number; sy: number; w: number; h: number }
-  | { t: 'note'; id: number; sx: number; sy: number };
+  | { t: 'resize'; id: number; note: NoteItem | DocItem; sx: number; sy: number; w: number; h: number }
+  | { t: 'place'; id: number; sx: number; sy: number; tool: 'note' | 'text' | 'doc' };
 
 const SIZES: Record<'pen' | 'marker' | 'eraser', number[]> = {
   pen: [2, 4, 8],
@@ -111,6 +125,10 @@ export class BoardView {
     });
     doc.onLocalChange = (items) => this.sync.push(items);
 
+    setRedrawHook(() => {
+      this.baseDirty = true;
+      this.schedule();
+    });
     this.bindInput();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(this.root);
@@ -164,6 +182,12 @@ export class BoardView {
     );
 
     e.colors = h('div', { class: 'swatches' });
+    e.docImport = h(
+      'button',
+      { class: 'sb', title: 'Importar Word o PDF como documento', onclick: () => this.importDocument() },
+      h('span', { html: icons.upload }),
+      h('em', {}, 'Importar Word/PDF'),
+    );
     e.sizes = h('div', { class: 'sizes' });
     const tools = h(
       'div',
@@ -174,8 +198,11 @@ export class BoardView {
       toolBtn('select', icons.select, 'Seleccionar / mover (V)'),
       toolBtn('hand', icons.hand, 'Mover pizarra (H, o espacio)'),
       toolBtn('note', icons.note, 'Post-it (N)'),
+      toolBtn('text', icons.text, 'Texto (T)'),
+      toolBtn('doc', icons.doc, 'Documento (D)'),
       (e.sep1 = h('div', { class: 'sep' })),
       e.colors,
+      e.docImport,
       (e.sep2 = h('div', { class: 'sep' })),
       e.sizes,
     );
@@ -206,6 +233,7 @@ export class BoardView {
     m.replaceChildren(
       item(icons.fit, 'Ver todo', () => this.fitContent()),
       item(icons.image, 'Exportar PNG', () => this.exportPng()),
+      item(icons.upload, 'Importar Word/PDF', () => this.importDocument()),
       item(icons.edit, 'Renombrar proyecto', () => this.rename()),
       h('div', { class: 'mi-sep' }),
       h(
@@ -232,7 +260,7 @@ export class BoardView {
 
   private refreshUI() {
     const e = this.els;
-    for (const t of ['pen', 'marker', 'eraser', 'select', 'hand', 'note'] as Tool[])
+    for (const t of ['pen', 'marker', 'eraser', 'select', 'hand', 'note', 'text', 'doc'] as Tool[])
       e['tool-' + t].classList.toggle('on', this.tool === t);
     e.undo.toggleAttribute('disabled', !this.doc.canUndo());
     e.redo.toggleAttribute('disabled', !this.doc.canRedo());
@@ -240,9 +268,10 @@ export class BoardView {
     e.zoomLabel.textContent = Math.round(this.view.zoom * 100) + '%';
 
     const drawing = this.tool === 'pen' || this.tool === 'marker' || this.tool === 'eraser';
-    e.colors.style.display = this.tool === 'pen' || this.tool === 'marker' ? '' : 'none';
+    e.colors.style.display = this.tool === 'pen' || this.tool === 'marker' || this.tool === 'text' ? '' : 'none';
+    e.docImport.style.display = this.tool === 'doc' ? '' : 'none';
     e.sizes.style.display = drawing ? '' : 'none';
-    e.sep1.style.display = e.colors.style.display;
+    e.sep1.style.display = e.colors.style.display === '' || this.tool === 'doc' ? '' : 'none';
     e.sep2.style.display = e.sizes.style.display;
     e.colors.replaceChildren(
       ...PEN_COLORS.map((c) =>
@@ -282,12 +311,18 @@ export class BoardView {
     }
     const strokes = sel.filter((i) => i.kind === 'stroke') as StrokeItem[];
     const notes = sel.filter((i) => i.kind === 'note') as NoteItem[];
+    const texts = sel.filter((i) => i.kind === 'text') as TextItem[];
+    const docs = sel.filter((i) => i.kind === 'doc') as DocItem[];
     const btn = (icon: string, label: string, fn: () => void, cls = '') =>
       h('button', { class: 'sb ' + cls, title: label, onclick: fn }, h('span', { html: icon }), h('em', {}, label));
     bar.replaceChildren(
       ...[
         notes.length === 1 && sel.length === 1 ? btn(icons.edit, 'Dibujar', () => this.editNote(notes[0].id)) : null,
         strokes.length ? btn(icons.sticky, 'Hacer post-it', () => this.strokesToNote()) : null,
+        docs.length === 1 && sel.length === 1 ? btn(icons.doc, 'Abrir', () => this.openDoc(docs[0].id)) : null,
+        texts.length === 1 && sel.length === 1 ? btn(icons.edit, 'Editar', () => this.editText(texts[0].id)) : null,
+        texts.length ? btn(icons.minus, 'Letra más pequeña', () => this.scaleText(texts, 1 / 1.25)) : null,
+        texts.length ? btn(icons.plus, 'Letra más grande', () => this.scaleText(texts, 1.25)) : null,
       ].filter((x): x is HTMLButtonElement => !!x),
       ...(notes.length
         ? [
@@ -300,6 +335,22 @@ export class BoardView {
                   style: `--c:${c}`,
                   title: 'Color del post-it',
                   onclick: () => this.doc.commit(notes.map((n) => ({ ...(this.doc.get(n.id) as NoteItem), color: c }))),
+                }),
+              ),
+            ),
+          ]
+        : []),
+      ...(texts.length
+        ? [
+            h(
+              'div',
+              { class: 'swatches' },
+              ...PEN_COLORS.map((c) =>
+                h('button', {
+                  class: 'sw',
+                  style: `--c:${c}`,
+                  title: 'Color del texto',
+                  onclick: () => this.doc.commit(texts.map((t) => ({ ...(this.doc.get(t.id) as TextItem), color: c }))),
                 }),
               ),
             ),
@@ -525,13 +576,14 @@ export class BoardView {
     }
   }
 
-  private singleSelectedNote(): NoteItem | null {
+  /** Post-it o documento seleccionado en solitario (tienen tirador para redimensionar). */
+  private singleSelectedNote(): NoteItem | DocItem | null {
     if (this.selection.size !== 1) return null;
     const it = this.doc.get([...this.selection][0]);
-    return it?.kind === 'note' ? it : null;
+    return it?.kind === 'note' || it?.kind === 'doc' ? it : null;
   }
 
-  private handleRect(n: NoteItem, rs?: { w: number; h: number }): Rect {
+  private handleRect(n: NoteItem | DocItem, rs?: { w: number; h: number }): Rect {
     const s = 16 / this.view.zoom;
     const w = rs ? rs.w : n.w;
     const hh = rs ? rs.h : n.h;
@@ -558,9 +610,13 @@ export class BoardView {
     const tol = 6 / this.view.zoom;
     for (let i = list.length - 1; i >= 0; i--) {
       const it = list[i];
-      if (it.kind === 'note') {
-        if (x >= it.x && x <= it.x + it.w && y >= it.y && y <= it.y + it.h) return it;
-      } else if (this.strokeHit(it, x, y, tol)) return it;
+      if (it.kind === 'stroke') {
+        if (this.strokeHit(it, x, y, tol)) return it;
+      } else {
+        const b = itemBounds(it);
+        const pad = it.kind === 'text' ? tol : 0;
+        if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) return it;
+      }
     }
     return null;
   }
@@ -581,7 +637,17 @@ export class BoardView {
     c.addEventListener('dblclick', (e) => {
       const [x, y] = this.toWorld(e.clientX, e.clientY);
       const it = this.hitTest(x, y);
-      if (it?.kind === 'note') this.editNote(it.id);
+      if (it) this.openItem(it);
+    });
+    // arrastrar un .docx / .pdf a la pizarra lo importa como documento
+    this.root.addEventListener('dragover', (e) => {
+      if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+    });
+    this.root.addEventListener('drop', (e) => {
+      const f = e.dataTransfer?.files?.[0];
+      if (!f) return;
+      e.preventDefault();
+      this.importDocument(f, this.toWorld(e.clientX, e.clientY));
     });
     window.addEventListener('keydown', this.onKey);
     window.addEventListener('keyup', this.onKeyUp);
@@ -638,8 +704,16 @@ export class BoardView {
       this.schedule();
       return;
     }
-    if (this.tool === 'note') {
-      this.g = { t: 'note', id: e.pointerId, sx: lx, sy: ly };
+    if (this.tool === 'note' || this.tool === 'text' || this.tool === 'doc') {
+      // tocar un texto existente con la herramienta texto lo edita
+      if (this.tool === 'text') {
+        const hit = this.hitTest(wx, wy);
+        if (hit?.kind === 'text') {
+          this.editText(hit.id);
+          return;
+        }
+      }
+      this.g = { t: 'place', id: e.pointerId, sx: lx, sy: ly, tool: this.tool };
       return;
     }
     if (this.tool === 'select') {
@@ -741,7 +815,8 @@ export class BoardView {
       }
       case 'resize':
         g.w = Math.max(60, g.note.w + (wx - g.sx));
-        g.h = Math.max(60, g.note.h + (wy - g.sy));
+        // los documentos mantienen la proporción de un folio A4
+        g.h = g.note.kind === 'doc' ? (g.w * DOC_BASE_H) / DOC_BASE_W : Math.max(60, g.note.h + (wy - g.sy));
         break;
     }
     this.schedule();
@@ -791,15 +866,7 @@ export class BoardView {
           for (const id of this.selection) {
             const it = this.doc.get(id);
             if (!it) continue;
-            if (it.kind === 'note') moved.push({ ...it, x: it.x + g.dx, y: it.y + g.dy });
-            else {
-              const pts = it.pts.slice();
-              for (let i = 0; i < pts.length; i += 3) {
-                pts[i] = Math.round((pts[i] + g.dx) * 100) / 100;
-                pts[i + 1] = Math.round((pts[i + 1] + g.dy) * 100) / 100;
-              }
-              moved.push({ ...it, pts });
-            }
+            moved.push(translateItem(it, g.dx, g.dy));
           }
           this.doc.commit(moved);
         } else if (!g.moved && g.tapOn) {
@@ -808,20 +875,24 @@ export class BoardView {
           const now = Date.now();
           const dbl = this.lastTap.id === g.tapOn && now - this.lastTap.t < 350;
           this.lastTap = { id: g.tapOn, t: now };
-          if (it?.kind === 'note' && (dbl || (g.wasSelected && e.pointerType !== 'mouse'))) this.editNote(it.id);
+          if (it && it.kind !== 'stroke' && (dbl || (g.wasSelected && e.pointerType !== 'mouse'))) this.openItem(it);
         }
         break;
       }
       case 'resize': {
         this.hidden.clear();
         this.baseDirty = true;
-        const cur = this.doc.get(g.note.id) as NoteItem | undefined;
+        const cur = this.doc.get(g.note.id) as NoteItem | DocItem | undefined;
         if (cur && !cancelled) this.doc.commit([{ ...cur, w: g.w, h: g.h }]);
         break;
       }
-      case 'note': {
+      case 'place': {
         const [lx, ly] = this.localXY(e.clientX, e.clientY);
-        if (Math.hypot(lx - g.sx, ly - g.sy) < 10 && !cancelled) this.createNoteAt(wx, wy);
+        if (Math.hypot(lx - g.sx, ly - g.sy) < 10 && !cancelled) {
+          if (g.tool === 'note') this.createNoteAt(wx, wy);
+          else if (g.tool === 'text') this.createTextAt(wx, wy);
+          else this.createDocAt(wx, wy);
+        }
         break;
       }
     }
@@ -842,7 +913,7 @@ export class BoardView {
   private inMarquee(it: Item, r: Rect) {
     const b = itemBounds(it);
     if (!rectsIntersect(b, r)) return false;
-    if (it.kind === 'note') return true;
+    if (it.kind !== 'stroke') return true;
     for (let i = 0; i < it.pts.length; i += 3) {
       const x = it.pts[i],
         y = it.pts[i + 1];
@@ -915,6 +986,8 @@ export class BoardView {
     else if (k === 'v') this.setTool('select');
     else if (k === 'h') this.setTool('hand');
     else if (k === 'n') this.setTool('note');
+    else if (k === 't') this.setTool('text');
+    else if (k === 'd') this.setTool('doc');
     else if (k === 'f') this.fitContent();
     else return;
     e.preventDefault();
@@ -974,6 +1047,200 @@ export class BoardView {
     }
   }
 
+  /** Abre el editor adecuado para un elemento (post-it, texto o documento). */
+  openItem(it: Item) {
+    if (it.kind === 'note') this.editNote(it.id);
+    else if (it.kind === 'text') this.editText(it.id);
+    else if (it.kind === 'doc') this.openDoc(it.id);
+  }
+
+  // ---------------- cuadros de texto ----------------
+  private createTextAt(wx: number, wy: number) {
+    const size = 22 / this.view.zoom;
+    const t: TextItem = {
+      id: uid(),
+      kind: 'text',
+      rev: 0,
+      by: '',
+      z: 0,
+      x: wx,
+      y: wy - (size * TEXT_LINE) / 2,
+      text: '',
+      size,
+      color: this.color === '#ffffff' ? PEN_COLORS[0] : this.color,
+    };
+    this.textEditor(t, true);
+  }
+
+  editText(id: string) {
+    const t = this.doc.get(id);
+    if (t?.kind === 'text') this.textEditor(t, false);
+  }
+
+  /** Edita el texto en el sitio con un <textarea> superpuesto al lienzo. */
+  private textEditor(t: TextItem, isNew: boolean) {
+    if (this.editing) return;
+    this.editing = true;
+    this.selection.clear();
+    this.hidden = new Set([t.id]);
+    this.baseDirty = true;
+    this.schedule();
+    const z = this.view.zoom;
+    const ta = h('textarea', { class: 'text-edit', spellcheck: 'true', value: t.text }) as HTMLTextAreaElement;
+    ta.style.font = TEXT_FONT(t.size * z);
+    ta.style.lineHeight = String(TEXT_LINE);
+    ta.style.color = t.color;
+    ta.style.left = (t.x - this.view.x) * z + 'px';
+    ta.style.top = (t.y - this.view.y) * z + 'px';
+    const autosize = () => {
+      ta.style.width = '0px';
+      ta.style.height = '0px';
+      ta.style.width = Math.max(ta.scrollWidth + 4, t.size * z * 2) + 'px';
+      ta.style.height = ta.scrollHeight + 'px';
+    };
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      const text = ta.value.replace(/\s+$/, '');
+      ta.remove();
+      this.editing = false;
+      this.hidden.clear();
+      this.baseDirty = true;
+      if (!text.trim()) {
+        if (!isNew) this.doc.remove([t.id]);
+      } else if (isNew) {
+        this.doc.add([{ ...t, text, z: this.doc.nextZ() }]);
+      } else if (text !== t.text) {
+        const cur = this.doc.get(t.id);
+        if (cur?.kind === 'text') this.doc.commit([{ ...cur, text }]);
+      }
+      if (text.trim()) {
+        this.selection = new Set([t.id]);
+        if (this.tool !== 'text') this.setTool('select');
+        this.selection = new Set([t.id]);
+      }
+      this.refreshUI();
+      this.schedule();
+    };
+    ta.addEventListener('input', autosize);
+    ta.addEventListener('blur', finish);
+    ta.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault();
+        ta.blur();
+      }
+    });
+    this.root.append(ta);
+    autosize();
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
+  }
+
+  private scaleText(texts: TextItem[], f: number) {
+    this.doc.commit(
+      texts
+        .map((t) => this.doc.get(t.id))
+        .filter((t): t is TextItem => t?.kind === 'text')
+        .map((t) => ({ ...t, size: Math.max(4, t.size * f) })),
+    );
+  }
+
+  // ---------------- documentos ----------------
+  private newDoc(wx: number, wy: number, title = 'Documento sin título', html = ''): DocItem {
+    const w = DOC_BASE_W / this.view.zoom;
+    const hh = DOC_BASE_H / this.view.zoom;
+    return {
+      id: uid(),
+      kind: 'doc',
+      rev: 0,
+      by: '',
+      z: this.doc.nextZ(),
+      x: wx - w / 2,
+      y: wy - hh / 2,
+      w,
+      h: hh,
+      title,
+      html,
+      pages: 1,
+      preview: { blocks: [] },
+    };
+  }
+
+  /** Desplaza un documento a la derecha hasta que no tape a otro elemento. */
+  private moveToFreeSpot(d: DocItem) {
+    const gap = 30 / this.view.zoom;
+    for (let i = 0; i < 30; i++) {
+      const r = { x: d.x, y: d.y, w: d.w, h: d.h };
+      if (!this.doc.visible().some((it) => rectsIntersect(itemBounds(it), r))) return;
+      d.x += d.w + gap;
+    }
+  }
+
+  private async createDocAt(wx: number, wy: number) {
+    const d = this.newDoc(wx, wy);
+    this.doc.add([d]);
+    this.setTool('select');
+    this.selection = new Set([d.id]);
+    await this.openDoc(d.id);
+  }
+
+  async openDoc(id: string) {
+    const d = this.doc.get(id);
+    if (d?.kind !== 'doc' || this.editing) return;
+    this.editing = true;
+    const r = await openDocEditor(d, (saved) => {
+      const cur = this.doc.get(id);
+      if (cur?.kind === 'doc') this.doc.commit([{ ...cur, title: saved.title, html: saved.html, pages: saved.pages, preview: saved.preview }], false);
+    });
+    this.editing = false;
+    if (r.action === 'delete') {
+      this.doc.remove([id]);
+      this.selection.clear();
+    } else {
+      // documento nuevo que se cierra vacío: se descarta
+      const cur = this.doc.get(id);
+      if (cur?.kind === 'doc' && !cur.preview.blocks.length && !cur.preview.img && cur.title === 'Documento sin título' && !/<img/.test(cur.html)) {
+        this.doc.remove([id]);
+        this.selection.clear();
+      }
+    }
+    this.refreshUI();
+  }
+
+  /** Importa un Word/PDF como documento nuevo en la pizarra. */
+  async importDocument(file?: File | null, at?: [number, number]) {
+    file ??= await pickFile(IMPORT_ACCEPT);
+    if (!file) return;
+    const [wx, wy] = at ?? [this.view.x + this.w / 2 / this.view.zoom, this.view.y + this.h / 2 / this.view.zoom];
+    const t = toast(`Importando ${file.name}…`, 60000);
+    try {
+      const res = await importFile(file, (m) => t && (t.textContent = m));
+      const d = this.newDoc(wx, wy, res.title, res.html);
+      this.moveToFreeSpot(d);
+      // página y vista previa se calculan con el HTML renderizado
+      const probe = h('div', { class: 'doc-paper doc-probe' });
+      probe.innerHTML = res.html;
+      document.body.append(probe);
+      const { buildPreview } = await import('../docs/sanitize');
+      d.preview = buildPreview(probe);
+      d.pages = countPages(probe);
+      probe.remove();
+      this.doc.add([d]);
+      this.setTool('select');
+      this.selection = new Set([d.id]);
+      this.refreshUI();
+      toast(`Importado: ${file.name}`);
+    } catch (e: any) {
+      toast(e?.message || 'No se pudo importar el archivo', 4000);
+    } finally {
+      t?.remove();
+    }
+  }
+
   /** Convierte los trazos seleccionados en un post-it que los contiene. */
   strokesToNote() {
     const strokes = [...this.selection].map((id) => this.doc.get(id)).filter((i): i is StrokeItem => i?.kind === 'stroke');
@@ -1028,8 +1295,7 @@ export class BoardView {
       .map((it) => {
         const id = uid();
         const z = this.doc.nextZ();
-        if (it.kind === 'note') return { ...it, id, z, x: it.x + off, y: it.y + off, deleted: undefined };
-        return { ...it, id, z, deleted: undefined, pts: it.pts.map((v, i) => (i % 3 === 2 ? v : v + off)) };
+        return { ...translateItem(it, off, off), id, z, deleted: undefined } as Item;
       });
     this.doc.add(copies);
     this.selection = new Set(copies.map((c) => c.id));
@@ -1098,4 +1364,15 @@ export class BoardView {
     document.removeEventListener('click', this.closeMenu);
     this.root.remove();
   }
+}
+
+/** Copia de un elemento desplazada (dx, dy) en el mundo. */
+function translateItem(it: Item, dx: number, dy: number): Item {
+  if (it.kind !== 'stroke') return { ...it, x: it.x + dx, y: it.y + dy };
+  const pts = it.pts.slice();
+  for (let i = 0; i < pts.length; i += 3) {
+    pts[i] = Math.round((pts[i] + dx) * 100) / 100;
+    pts[i + 1] = Math.round((pts[i + 1] + dy) * 100) / 100;
+  }
+  return { ...it, pts };
 }

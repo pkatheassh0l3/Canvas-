@@ -26,7 +26,18 @@ export default defineConfig({
     __UPDATE_REPO__: JSON.stringify(pkg.canvaspp?.updateRepo ?? ''),
   },
   plugins: [versionFile()],
-  build: { target: 'es2020', outDir: 'dist' },
+  build: {
+    target: 'es2020',
+    outDir: 'dist',
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        // el worker de pdf.js se publica como .js: algunos servidores (WebView de Android) no conocen .mjs
+        assetFileNames: (info) =>
+          (info.names?.[0] ?? info.name ?? '').endsWith('.mjs') ? 'assets/[name]-[hash].js' : 'assets/[name]-[hash][extname]',
+      },
+    },
+  },
   server: {
     proxy: {
       // en desarrollo, `npm run dev` + servidor local en :8787

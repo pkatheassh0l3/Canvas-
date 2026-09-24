@@ -1,6 +1,7 @@
 // Dibujo de trazos y post-its sobre un CanvasRenderingContext2D.
 import { getStroke } from 'perfect-freehand';
-import type { Item, NoteItem, Rect, StrokeData } from '../types';
+import type { DocItem, Item, NoteItem, Rect, StrokeData, TextItem } from '../types';
+import { assetImage } from '../assets';
 
 const pathCache = new WeakMap<StrokeData, Path2D>();
 const boundsCache = new WeakMap<object, Rect>();
@@ -84,7 +85,130 @@ export function strokeBounds(s: StrokeData): Rect {
 
 export function itemBounds(it: Item): Rect {
   if (it.kind === 'stroke') return strokeBounds(it);
+  if (it.kind === 'text') return textBounds(it);
   return { x: it.x, y: it.y, w: it.w, h: it.h };
+}
+
+// ---------------- cuadros de texto ----------------
+export const TEXT_FONT = (size: number) => `500 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+export const TEXT_LINE = 1.3;
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+export function textBounds(t: TextItem): Rect {
+  const c = boundsCache.get(t);
+  if (c) return c;
+  measureCtx ??= document.createElement('canvas').getContext('2d')!;
+  measureCtx.font = TEXT_FONT(t.size);
+  const lines = (t.text || ' ').split('\n');
+  let w = 0;
+  for (const l of lines) w = Math.max(w, measureCtx.measureText(l || ' ').width);
+  const r = { x: t.x, y: t.y, w: Math.max(w, t.size * 0.6), h: lines.length * t.size * TEXT_LINE };
+  boundsCache.set(t, r);
+  return r;
+}
+
+export function drawText(ctx: CanvasRenderingContext2D, t: TextItem) {
+  ctx.font = TEXT_FONT(t.size);
+  ctx.fillStyle = t.color;
+  ctx.textBaseline = 'top';
+  const lh = t.size * TEXT_LINE;
+  const pad = (lh - t.size) / 2;
+  t.text.split('\n').forEach((l, i) => ctx.fillText(l, t.x, t.y + pad + i * lh));
+}
+
+// ---------------- documentos (pila de folios) ----------------
+export const DOC_BASE_W = 252; // proporción A4
+export const DOC_BASE_H = 356;
+let redrawHook: () => void = () => {};
+/** La pizarra registra aquí cómo repintarse cuando termina de cargar una imagen. */
+export function setRedrawHook(fn: () => void) {
+  redrawHook = fn;
+}
+
+function sheet(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, shadow: boolean, zoom: number) {
+  ctx.save();
+  if (shadow && zoom > 0.2) {
+    ctx.shadowColor = 'rgba(0,0,0,0.16)';
+    ctx.shadowBlur = 8 * zoom;
+    ctx.shadowOffsetY = 2 * zoom;
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 1 / zoom;
+  ctx.strokeRect(x, y, w, h);
+}
+
+export function drawDoc(ctx: CanvasRenderingContext2D, d: DocItem, zoom = 1) {
+  const s = d.w / DOC_BASE_W;
+  // folios de debajo: se ven como una pila cuando hay más de una página
+  const extra = Math.min(2, Math.max(0, d.pages - 1));
+  for (let i = extra; i >= 1; i--) {
+    ctx.save();
+    ctx.translate(d.x + d.w / 2 + i * 5 * s, d.y + d.h / 2 + i * 4 * s);
+    ctx.rotate(((i % 2 ? 1.6 : -1.2) * Math.PI) / 180);
+    sheet(ctx, -d.w / 2, -d.h / 2, d.w, d.h, true, zoom);
+    ctx.restore();
+  }
+  sheet(ctx, d.x, d.y, d.w, d.h, true, zoom);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(d.x, d.y, d.w, d.h);
+  ctx.clip();
+  ctx.translate(d.x, d.y);
+  ctx.scale(s, s);
+  const detail = zoom * s;
+  if (d.preview?.img) {
+    const img = assetImage(d.preview.img, redrawHook);
+    if (img) {
+      const k = Math.min(DOC_BASE_W / img.naturalWidth, DOC_BASE_H / img.naturalHeight);
+      ctx.drawImage(img, 0, 0, img.naturalWidth * k, img.naturalHeight * k);
+    }
+  } else if (detail > 0.18) {
+    const m = 20;
+    let y = m;
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#1f2328';
+    ctx.font = '700 15px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    for (const l of wrapText(ctx, d.title || 'Documento sin título', DOC_BASE_W - m * 2).slice(0, 2)) {
+      ctx.fillText(l, m, y);
+      y += 19;
+    }
+    y += 6;
+    for (const b of d.preview?.blocks ?? []) {
+      const head = b.s === 'h';
+      ctx.font = head ? '700 9.5px system-ui, sans-serif' : '400 8px system-ui, sans-serif';
+      ctx.fillStyle = head ? '#1f2328' : '#4a4f57';
+      for (const l of wrapText(ctx, b.t, DOC_BASE_W - m * 2)) {
+        if (y > DOC_BASE_H - 34) break;
+        ctx.fillText(l, m, y);
+        y += head ? 13 : 11;
+      }
+      y += 4;
+      if (y > DOC_BASE_H - 34) break;
+    }
+  } else {
+    // muy alejado: líneas grises en lugar de texto
+    ctx.fillStyle = '#d6d3cc';
+    ctx.fillRect(20, 20, 150, 12);
+    for (let i = 0; i < 14; i++) ctx.fillRect(20, 46 + i * 18, i % 4 === 3 ? 120 : 210, 6);
+  }
+  // etiqueta con el número de páginas
+  if (detail > 0.15) {
+    const label = d.pages > 1 ? `${d.pages} págs.` : '1 pág.';
+    ctx.font = '600 8.5px system-ui, sans-serif';
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(31,35,40,0.75)';
+    ctx.beginPath();
+    ctx.roundRect(DOC_BASE_W - tw - 22, DOC_BASE_H - 24, tw + 12, 15, 7);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, DOC_BASE_W - tw - 16, DOC_BASE_H - 16.5);
+  }
+  ctx.restore();
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -151,7 +275,9 @@ export function drawNote(ctx: CanvasRenderingContext2D, n: NoteItem, zoom = 1, o
 
 export function drawItem(ctx: CanvasRenderingContext2D, it: Item, zoom: number) {
   if (it.kind === 'stroke') drawStroke(ctx, it);
-  else drawNote(ctx, it, zoom);
+  else if (it.kind === 'note') drawNote(ctx, it, zoom);
+  else if (it.kind === 'text') drawText(ctx, it);
+  else if (it.kind === 'doc') drawDoc(ctx, it, zoom);
 }
 
 /** Renderiza un conjunto de elementos a un canvas (miniaturas / exportar PNG). */

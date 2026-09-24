@@ -17,10 +17,12 @@ const TOKEN = process.env.CANVAS_TOKEN || '';
 const PUBLIC_DIR = path.resolve(process.env.CANVAS_PUBLIC || path.join(__dirname, 'public'));
 const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
 const TRASH_DIR = path.join(DATA_DIR, 'trash');
+const ASSETS_DIR = path.join(DATA_DIR, 'assets'); // imágenes de documentos (PDF/Word importados)
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 fs.mkdirSync(TRASH_DIR, { recursive: true });
+fs.mkdirSync(ASSETS_DIR, { recursive: true });
 
 if (!TOKEN) console.warn('[canvas++] AVISO: CANVAS_TOKEN vacío, el servidor no pide autenticación.');
 
@@ -58,7 +60,7 @@ function send(res, status, body, headers = {}) {
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': 'Authorization,Content-Type',
   };
 }
@@ -173,6 +175,7 @@ function mergeOps(p, ops) {
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json',
   '.webmanifest': 'application/manifest+json',
@@ -211,6 +214,49 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/api/health') return send(res, 200, { ok: true, auth: !!TOKEN, version: 1 });
     if (!checkToken(tokenFromReq(req, url))) return send(res, 401, { error: 'token inválido' });
+
+    // ----- assets binarios (imágenes de documentos) -----
+    const am = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
+    if (am) {
+      const aid = am[1];
+      if (!ID_RE.test(aid)) return send(res, 400, { error: 'id inválido' });
+      const file = path.join(ASSETS_DIR, aid);
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        try {
+          const [st, type] = await Promise.all([
+            fsp.stat(file),
+            fsp.readFile(file + '.type', 'utf8').catch(() => 'application/octet-stream'),
+          ]);
+          res.writeHead(200, {
+            'Content-Type': type,
+            'Content-Length': st.size,
+            'Cache-Control': 'private, max-age=31536000, immutable',
+            'X-Content-Type-Options': 'nosniff',
+            ...corsHeaders(),
+          });
+          if (req.method === 'HEAD') return res.end();
+          return fs.createReadStream(file).pipe(res);
+        } catch {
+          return send(res, 404, { error: 'no existe' });
+        }
+      }
+      if (req.method === 'PUT') {
+        const chunks = [];
+        let size = 0;
+        for await (const c of req) {
+          size += c.length;
+          if (size > 50 * 1024 * 1024) return send(res, 413, { error: 'archivo demasiado grande' });
+          chunks.push(c);
+        }
+        const type = String(req.headers['content-type'] || 'application/octet-stream').slice(0, 100);
+        if (!/^image\/(png|jpeg|webp|gif)$/.test(type)) return send(res, 415, { error: 'tipo no permitido' });
+        await fsp.writeFile(file + '.tmp', Buffer.concat(chunks));
+        await fsp.rename(file + '.tmp', file);
+        await fsp.writeFile(file + '.type', type);
+        return send(res, 201, { ok: true, id: aid, size });
+      }
+      return send(res, 405, { error: 'método no permitido' });
+    }
 
     const m = url.pathname.match(/^\/api\/projects(?:\/([^/]+))?$/);
     if (!m) return send(res, 404, { error: 'no encontrado' });

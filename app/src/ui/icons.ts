@@ -48,4 +48,15 @@ export const icons = {
   refresh: svg(
     '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M8 16H3v5"/>',
   ),
+  listUl: svg('<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>'),
+  listOl: svg('<path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>'),
+  alignLeft: svg('<path d="M21 6H3"/><path d="M15 12H3"/><path d="M17 18H3"/>'),
+  alignCenter: svg('<path d="M21 6H3"/><path d="M17 12H7"/><path d="M19 18H5"/>'),
+  alignRight: svg('<path d="M21 6H3"/><path d="M21 12H9"/><path d="M21 18H7"/>'),
+  alignJustify: svg('<path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/>'),
+  pageBreak: svg('<path d="M6 3v5h12V3"/><path d="M6 21v-5h12v5"/><path d="M3 12h2M9 12h2M13 12h2M19 12h2"/>'),
+  eraserText: svg('<path d="M4 7V4h16v3"/><path d="M5 20h6"/><path d="M13 4 8 20"/><path d="m15 15 5 5"/><path d="m20 15-5 5"/>'),
+  doc: svg('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/>'),
+  upload: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>'),
+  textSize: svg('<path d="M3 7V5h10v2"/><path d="M8 5v14"/><path d="M6 19h4"/><path d="M14 13v-1h7v1"/><path d="M17.5 12v7"/><path d="M16 19h3"/>'),
 };

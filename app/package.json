@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "idb-keyval": "^6.2.1",
+    "mammoth": "^1.12.3",
+    "pdfjs-dist": "^6.3.289",
     "perfect-freehand": "^1.2.2"
   },
   "devDependencies": {
